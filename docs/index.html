@@ -31,7 +31,7 @@
   select,input,button{font:inherit;color:var(--txt);background:var(--panel2);
     border:1px solid var(--line);border-radius:8px;padding:8px 10px}
   select:focus,input:focus{outline:none;border-color:var(--teal)}
-  input.tick{width:92px;text-transform:uppercase}
+  input.tick{width:130px;text-transform:uppercase}
   button.go{cursor:pointer;font-weight:700;letter-spacing:.4px;color:#04140f;background:var(--teal);
     border-color:transparent;padding:8px 16px}
   button.go:hover{filter:brightness(1.08)}
@@ -104,8 +104,8 @@
   <div class="spacer"></div>
   <div class="ctl">
     <label>Ticker</label>
-    <select id="tickerSel"></select>
-    <input id="tickerFree" class="tick mono" placeholder="or type" />
+    <input id="tickerInput" class="tick mono" list="tickerList" placeholder="e.g. MU" autocomplete="off" />
+    <datalist id="tickerList"></datalist>
   </div>
   <div class="ctl">
     <label>Expiry</label>
@@ -196,11 +196,17 @@ let LAST = null;
 async function loadConfig(){
   try{
     const r = await fetch(api("/api/config")); const c = await r.json();
-    const sel = $("tickerSel"); sel.innerHTML = "";
-    (c.tickers||[]).forEach(t => { const o=document.createElement("option"); o.value=t; o.textContent=t; sel.appendChild(o); });
+    const list = $("tickerList"); list.innerHTML = "";
+    const tickers = c.tickers || [];
+    tickers.forEach(t => { const o=document.createElement("option"); o.value=t; list.appendChild(o); });
     const badge = $("modeBadge");
     badge.textContent = c.mode; badge.className = "badge " + (c.mode==="live"?"live":"mock");
-    if(c.mode==="live" && !c.token_configured){ msg("Live mode but no shared token configured — chain calls will fail until SCHWAB_TOKEN_SHARE_KEY is set."); }
+    badge.title = tickers.length + " tickers available (type to search; any symbol allowed)";
+    // Seed a sensible default ticker so the page has something to show.
+    if(!$("tickerInput").value){
+      $("tickerInput").value = tickers.includes("MU") ? "MU" : (tickers[0] || "");
+    }
+    if(c.mode==="live" && !c.token_configured){ msg("Live mode but no shared token configured — chain calls will fail until SCHWAB_TOKEN_SHARE_KEY is set on the backend."); }
   }catch(e){ msg("Could not reach the API at "+(apiBase()||"this origin")+". Set the API endpoint with ⚙."); }
 }
 
@@ -217,8 +223,7 @@ async function loadExpiries(){
 }
 
 function currentTicker(){
-  const free = $("tickerFree").value.trim().toUpperCase();
-  return free || $("tickerSel").value;
+  return $("tickerInput").value.trim().toUpperCase();
 }
 
 async function calculate(){
@@ -348,9 +353,10 @@ function drawChain(d){
 function msg(s){ $("msg").textContent = s||""; }
 
 // ---- events ----
-$("tickerSel").addEventListener("change",()=>{ $("tickerFree").value=""; loadExpiries(); });
-$("tickerFree").addEventListener("change",loadExpiries);
-$("tickerFree").addEventListener("keydown",e=>{ if(e.key==="Enter"){ loadExpiries(); } });
+let _lastTicker="";
+function onTickerChange(){ const t=currentTicker(); if(t && t!==_lastTicker){ _lastTicker=t; loadExpiries(); } }
+$("tickerInput").addEventListener("change",onTickerChange);   // fires on datalist pick / blur
+$("tickerInput").addEventListener("keydown",e=>{ if(e.key==="Enter"){ onTickerChange(); } });
 $("expirySel").addEventListener("change",()=>{ if($("expirySel").value) calculate(); });
 $("goBtn").addEventListener("click",calculate);
 // api endpoint modal
@@ -362,7 +368,7 @@ $("apiSave").addEventListener("click",()=>{
   $("modal").classList.remove("on"); boot();
 });
 
-async function boot(){ await loadConfig(); await loadExpiries(); }
+async function boot(){ await loadConfig(); _lastTicker = currentTicker(); await loadExpiries(); }
 boot();
 </script>
 </body>

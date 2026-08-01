@@ -66,9 +66,14 @@ between the two walls — the "crush" zone in the framework.
 
 ## Using it
 
-* **Ticker** — choose from the dropdown or type any symbol.
+* **Ticker** — type-to-search across the full **S&P 500 + Nasdaq-100** universe
+  (~517 symbols, bundled in [`app/universe.py`](app/universe.py)); the box also
+  accepts any other symbol Schwab recognises.
 * **Expiry** — auto-populates from the live chain (mock mode lists the next 5 Fridays).
 * **Calculate C** — returns the target and renders the profile + chain.
+
+Data is **live Schwab** by default (`DATA_MODE=live`). Set `DATA_MODE=mock` only
+for an offline demo.
 
 The **Net Dealer Directional Profile** plots `netDIR(P)` across strikes with the
 zero-crossing (C, pink) and spot (blue) marked. The chain table shows calls
@@ -81,15 +86,15 @@ walls outlined.
 
 ```bash
 pip install -r requirements.txt
-python run.py            # http://localhost:8080  (mock mode, no token needed)
+cp .env.example .env
+# set SCHWAB_TOKEN_SHARE_KEY=... (== MM's share key) — required for live data
+python run.py            # http://localhost:8080  (live Schwab by default)
 ```
 
-Go **live** (real Schwab chains via the shared token):
+No token handy? Run the offline demo with a synthetic chain:
 
 ```bash
-cp .env.example .env
-# set DATA_MODE=live and SCHWAB_TOKEN_SHARE_KEY=... (== MM's share key)
-python run.py
+DATA_MODE=mock python run.py
 ```
 
 ### The shared Schwab token

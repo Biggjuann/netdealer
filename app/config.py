@@ -11,6 +11,8 @@ import os
 from dataclasses import dataclass, field
 from typing import List
 
+from app.universe import UNIVERSE
+
 try:
     from dotenv import load_dotenv
 
@@ -42,13 +44,14 @@ def _list(name: str, default: List[str]) -> List[str]:
 
 @dataclass
 class Settings:
-    # "mock" -> synthetic chain, no network (default so it runs anywhere).
-    # "live" -> pull real chains from Schwab using the shared token.
-    data_mode: str = field(default_factory=lambda: os.getenv("DATA_MODE", "mock").lower())
+    # "live" -> pull real chains from Schwab using the shared token (default).
+    # "mock" -> synthetic chain, no network (for offline/CI/demo only).
+    data_mode: str = field(default_factory=lambda: os.getenv("DATA_MODE", "live").lower())
 
-    # Tickers offered in the dropdown (the user can also type any symbol).
-    tickers: List[str] = field(default_factory=lambda: _list(
-        "TICKERS", ["MU", "SPY", "QQQ", "AAPL", "NVDA", "TSLA", "AMD", "META"]))
+    # Tickers offered in the dropdown. Defaults to the full S&P 500 + Nasdaq-100
+    # universe; the UI search box also accepts any symbol Schwab recognises.
+    # Set TICKERS to a comma-separated list to override (e.g. a watchlist).
+    tickers: List[str] = field(default_factory=lambda: _list("TICKERS", UNIVERSE))
 
     # ----- Schwab market data (shared token; read-only, chains + quotes) -----
     schwab_base_url: str = field(default_factory=lambda: os.getenv(
