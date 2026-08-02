@@ -85,6 +85,22 @@ def bs_put_delta(S: float, K: float, T: float, sigma: float, r: float = DEFAULT_
     return bs_call_delta(S, K, T, sigma, r) - 1.0
 
 
+def bs_price(S: float, K: float, T: float, sigma: float, is_call: bool,
+             r: float = DEFAULT_RATE) -> float:
+    """Black-Scholes option price. Falls back to intrinsic at/near expiry."""
+    if S <= 0 or K <= 0:
+        return 0.0
+    if T <= 0 or sigma <= 0:
+        return max(S - K, 0.0) if is_call else max(K - S, 0.0)
+    sqrtT = sigma * math.sqrt(T)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / sqrtT
+    d2 = d1 - sqrtT
+    disc = math.exp(-r * T)
+    if is_call:
+        return S * norm_cdf(d1) - K * disc * norm_cdf(d2)
+    return K * disc * norm_cdf(-d2) - S * norm_cdf(-d1)
+
+
 @dataclass
 class StrikeRow:
     """One strike's call + put open interest / vol / iv, merged across the two maps."""

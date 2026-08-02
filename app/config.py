@@ -11,7 +11,7 @@ import os
 from dataclasses import dataclass, field
 from typing import List
 
-from app.universe import UNIVERSE
+from app.universe import LIQUID, UNIVERSE
 
 try:
     from dotenv import load_dotenv
@@ -77,6 +77,26 @@ class Settings:
     strike_count: int = field(default_factory=lambda: _int("STRIKE_COUNT", 80))
     # How far out (days) to look when listing available expirations.
     expiry_horizon_days: int = field(default_factory=lambda: _int("EXPIRY_HORIZON_DAYS", 60))
+
+    # ----- Scanner ---------------------------------------------------------
+    # Symbols the fast scanner sweeps. Defaults to the curated LIQUID list;
+    # override with SCAN_TICKERS to point it at a custom watchlist.
+    scan_tickers: List[str] = field(default_factory=lambda: _list("SCAN_TICKERS", LIQUID))
+    # A candidate contract must clear these floors to be tradeable (keeps penny/
+    # dead strikes out of the rankings).
+    scan_min_oi: float = field(default_factory=lambda: _float("SCAN_MIN_OI", 100))
+    scan_min_ask: float = field(default_factory=lambda: _float("SCAN_MIN_ASK", 0.10))
+    # Ignore tickers whose C is within this fraction of spot (no real edge).
+    scan_min_edge_pct: float = field(default_factory=lambda: _float("SCAN_MIN_EDGE_PCT", 0.002))
+    # A ranked opportunity must project at least this gain (0.10 = +10%);
+    # anything less is not worth surfacing.
+    scan_min_gain_pct: float = field(default_factory=lambda: _float("SCAN_MIN_GAIN_PCT", 0.10))
+    # Cap the projected gain shown (guards against a stale/penny ask blowing up).
+    scan_max_gain_pct: float = field(default_factory=lambda: _float("SCAN_MAX_GAIN_PCT", 20.0))
+    # Only look at expiries within this many days for the "nearest weekly".
+    scan_within_days: int = field(default_factory=lambda: _int("SCAN_WITHIN_DAYS", 9))
+    scan_workers: int = field(default_factory=lambda: _int("SCAN_WORKERS", 8))
+    scan_cache_seconds: int = field(default_factory=lambda: _int("SCAN_CACHE_SECONDS", 60))
 
     # ----- Web -------------------------------------------------------------
     # CORS origins allowed to call the API (for a GitHub Pages front-end that

@@ -5,10 +5,10 @@ Endpoints
     GET /api/config             -> mode, tickers, model params (health check)
     GET /api/expiries?ticker=   -> available expiration dates
     GET /api/net-dealer?ticker=&expiry=  -> the "C" target + full chain analysis
+    GET /api/scan               -> curated universe ranked by projected %-gain to C
 """
 from __future__ import annotations
 
-import datetime as dt
 import logging
 import os
 from dataclasses import asdict
@@ -20,6 +20,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from app.config import settings
 from app.net_dealer import compute
 from app.providers.factory import build_provider
+from app.scanner import run_scan
+from app.timeutil import t_years
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -36,20 +38,6 @@ app.add_middleware(
 )
 
 provider = build_provider()
-
-
-def _t_years(expiry: str) -> tuple[float, float]:
-    """(years, calendar-days) from now to the expiry's 16:00 ET close-ish."""
-    try:
-        exp = dt.datetime.strptime(expiry, "%Y-%m-%d")
-    except ValueError:
-        return 1.0 / 365.0, 1.0
-    # Approximate the expiry moment as 4pm ET (21:00 UTC) that day.
-    exp = exp.replace(hour=21, minute=0)
-    now = dt.datetime.utcnow()
-    seconds = (exp - now).total_seconds()
-    days = max(0.0, seconds / 86400.0)
-    return max(seconds / (365.0 * 86400.0), 0.0), days
 
 
 @app.get("/")
@@ -88,14 +76,25 @@ def net_dealer(ticker: str = Query(..., min_length=1),
         log.warning("chain %s %s failed: %s", ticker, expiry, exc)
         return JSONResponse({"error": f"chain fetch failed: {exc}"}, status_code=502)
 
-    t_years, dte = _t_years(expiry)
+    ty, dte = t_years(expiry)
     result = compute(
         ticker=ticker, expiry=expiry, rows=rows, spot=spot,
-        t_years=t_years, dte=dte,
+        t_years=ty, dte=dte,
         r=settings.risk_free_rate, fallback_iv=settings.fallback_iv,
     )
     payload = asdict(result)
     payload["mode"] = "live" if settings.live else "mock"
+    return JSONResponse(payload)
+
+
+@app.get("/api/scan")
+def scan(refresh: bool = Query(False, description="bypass the short-lived cache")) -> JSONResponse:
+    """Rank the curated liquid universe by projected option %-gain to the C pin."""
+    try:
+        payload = run_scan(provider, use_cache=not refresh)
+    except Exception as exc:  # pragma: no cover - defensive
+        log.warning("scan failed: %s", exc)
+        return JSONResponse({"error": f"scan failed: {exc}"}, status_code=502)
     return JSONResponse(payload)
 
 

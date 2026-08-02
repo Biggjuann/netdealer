@@ -96,20 +96,18 @@ class SchwabChainClient:
                 expiries.add(exp_key.split(":")[0])   # "2026-07-31:0" -> "2026-07-31"
         return sorted(expiries)
 
-    def get_chain(self, ticker: str, expiry: str,
-                  strike_count: Optional[int] = None) -> Tuple[List[StrikeRow], Optional[float]]:
-        """Merged per-strike call+put table for one expiry, plus the underlying price."""
-        sc = strike_count or settings.strike_count
-        data = self._chains_raw(ticker, expiry, expiry, strike_count=sc)
-        if not data:
-            return [], None
-
+    @staticmethod
+    def _spot_from(data: dict) -> Optional[float]:
         spot = _f(data.get("underlyingPrice")) or None
         if not spot:
             under = data.get("underlying") or {}
             spot = _f(under.get("last") or under.get("mark") or under.get("close")) or None
+        return spot
 
-        rows: dict[float, StrikeRow] = {}
+    @staticmethod
+    def _rows_for_expiry(data: dict, expiry: str) -> List[StrikeRow]:
+        """Merge the call + put maps of one expiry into a per-strike table."""
+        rows: dict = {}
 
         def ingest(map_key: str, is_call: bool) -> None:
             for _exp, strikes in (data.get(map_key) or {}).items():
@@ -134,4 +132,41 @@ class SchwabChainClient:
 
         ingest("callExpDateMap", True)
         ingest("putExpDateMap", False)
-        return sorted(rows.values(), key=lambda x: x.strike), spot
+        return sorted(rows.values(), key=lambda x: x.strike)
+
+    @staticmethod
+    def _expiries_in(data: dict) -> List[str]:
+        exps = set()
+        for map_key in ("callExpDateMap", "putExpDateMap"):
+            for exp_key in (data.get(map_key) or {}).keys():
+                exps.add(exp_key.split(":")[0])
+        return sorted(exps)
+
+    def get_chain(self, ticker: str, expiry: str,
+                  strike_count: Optional[int] = None) -> Tuple[List[StrikeRow], Optional[float]]:
+        """Merged per-strike call+put table for one expiry, plus the underlying price."""
+        sc = strike_count or settings.strike_count
+        data = self._chains_raw(ticker, expiry, expiry, strike_count=sc)
+        if not data:
+            return [], None
+        return self._rows_for_expiry(data, expiry), self._spot_from(data)
+
+    def get_nearest_chain(self, ticker: str, within_days: int = 9,
+                          strike_count: Optional[int] = None
+                          ) -> Tuple[Optional[str], List[StrikeRow], Optional[float]]:
+        """Nearest expiry within ``within_days`` in a SINGLE chains call.
+
+        Returns (expiry, rows, spot). Used by the scanner to keep the request
+        count to one per ticker.
+        """
+        sc = strike_count or settings.strike_count
+        today = dt.date.today()
+        end = today + dt.timedelta(days=within_days)
+        data = self._chains_raw(ticker, today.isoformat(), end.isoformat(), strike_count=sc)
+        if not data:
+            return None, [], None
+        exps = self._expiries_in(data)
+        if not exps:
+            return None, [], None
+        expiry = exps[0]
+        return expiry, self._rows_for_expiry(data, expiry), self._spot_from(data)

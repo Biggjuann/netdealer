@@ -82,6 +82,41 @@ walls outlined.
 
 ---
 
+## Opportunity scanner
+
+The **📡 Scanner** tab sweeps a curated set of ~50 highly-liquid names
+([`LIQUID`](app/universe.py)) and ranks them by the **projected option %-gain if
+price pins to C** by the nearest weekly. For each ticker it:
+
+1. pulls the nearest-weekly chain (one API call) and computes **C**;
+2. takes `edge% = (C − spot)/spot` — sign picks the side (**C > spot → buy call**,
+   **C < spot → buy put**);
+3. among strikes that finish **in-the-money at C** and clear the liquidity floors
+   (OI / ask), picks the one maximising
+
+   ```
+   est_gain = (intrinsic_at_C − ask) / ask
+   ```
+
+   which naturally lands on the cheap-but-still-finishes-ITM sweet spot.
+
+Results are sorted by projected gain (highest first); only real, positive-gain,
+tradeable opportunities are surfaced — flat-edge or illiquid names are listed as
+skipped. Click any row to open that ticker in the Calculator. The scan runs with
+a small thread pool and a short result cache (`SCAN_*` knobs in
+[`.env.example`](.env.example)).
+
+> The projected gain assumes the underlying pins **exactly** to C at expiry and
+> the contract realises full intrinsic value — an idealized upper-bound, not a
+> forecast. **Not financial advice.**
+
+```
+GET /api/scan            -> ranked opportunities (cached up to SCAN_CACHE_SECONDS)
+GET /api/scan?refresh=true  -> force a fresh sweep
+```
+
+---
+
 ## Running locally
 
 ```bash
@@ -155,17 +190,21 @@ smoke-test on every push.
 
 ```
 app/
-  net_dealer.py         # the "C" engine — pure, unit-tested math
-  config.py             # env-driven settings (shared-token vars)
-  server.py             # FastAPI: /api/config, /api/expiries, /api/net-dealer
+  net_dealer.py         # the "C" engine — pure, unit-tested math (+ BS price/delta)
+  scanner.py            # opportunity scanner — ranks liquid names by %-gain to C
+  universe.py           # bundled S&P 500 + Nasdaq-100 list, and the LIQUID scan set
+  timeutil.py           # time-to-expiry helper
+  config.py             # env-driven settings (shared-token + scan vars)
+  server.py             # FastAPI: /api/config, /api/expiries, /api/net-dealer, /api/scan
   providers/
     token.py            # SharedTokenProvider (shared Schwab access token)
     schwab.py           # SchwabChainClient — chains + expirations (read-only)
-    mock.py             # synthetic chain (default; zero network)
+    mock.py             # synthetic chain (offline; zero network)
     factory.py          # mock vs live wiring
-  static/dashboard.html # the UI (ticker + expiry selectors)
+  static/dashboard.html # the UI (Calculator + Scanner tabs)
 docs/index.html         # same UI, for GitHub Pages
 tests/test_net_dealer.py
+tests/test_scanner.py
 ```
 
 ## API
@@ -177,4 +216,7 @@ GET /api/net-dealer?ticker=MU&expiry=2026-08-07
     -> { c_target, c_netdir, max_pain, call_wall, put_wall,
          long_avg, short_avg, spot, dte, rows: [{strike, call_oi, put_oi,
          netdir, ...}], ... }
+GET /api/scan[?refresh=true]           -> { scanned, opportunities, results:
+         [{ticker, spot, c_target, edge_pct, direction, strike, premium,
+           est_gain_pct, breakeven, expiry, ...}], skipped: [...] }
 ```

@@ -81,3 +81,22 @@ NASDAQ100 = [
 
 # De-duplicated union, sorted — used as the default ticker list.
 UNIVERSE = sorted(set(SP500) | set(NASDAQ100))
+
+
+# Curated ~50 highly-liquid, actively-optioned names for the fast synchronous
+# scanner (mega-caps + the most active single-names + the big index/sector ETFs).
+# ETFs are included deliberately — they are the deepest weekly-options markets —
+# even though they are not S&P 500 / Nasdaq-100 members.
+LIQUID = [
+    # Index / sector ETFs
+    "SPY", "QQQ", "IWM", "DIA", "SMH", "XLF", "XLE", "GLD", "TLT",
+    # Mega-cap tech
+    "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA", "AVGO", "NFLX",
+    "AMD", "INTC", "MU", "QCOM", "ORCL", "CRM", "ADBE", "PLTR", "SMCI", "ARM",
+    # High-beta / retail favorites
+    "COIN", "MSTR", "MARA", "RIOT", "SHOP", "UBER", "SNOW", "BABA", "NIO",
+    # Financials / industrials / autos
+    "JPM", "BAC", "GS", "WFC", "BA", "F", "GM",
+    # Energy / healthcare / consumer
+    "XOM", "CVX", "LLY", "UNH", "PFE", "COST", "WMT", "HD", "DIS", "SBUX",
+]

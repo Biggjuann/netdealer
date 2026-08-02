@@ -95,6 +95,30 @@
   .modal input{width:100%;margin:8px 0 14px}
   .foot{color:var(--dim);font-size:11px;text-align:center;margin:26px 0 8px;line-height:1.7}
   .loading{opacity:.45;pointer-events:none}
+  /* tabs */
+  .tabs{display:flex;gap:8px;margin-bottom:16px}
+  .tab{cursor:pointer;font-size:13px;font-weight:700;letter-spacing:.3px;color:var(--muted);
+    background:var(--panel);border:1px solid var(--line);padding:9px 16px;border-radius:10px;transition:.15s}
+  .tab.active{color:var(--teal);border-color:rgba(34,211,183,.4);background:rgba(34,211,183,.08)}
+  .tab:hover{color:var(--txt)}
+  /* scanner */
+  .scanbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+  .scanbar .sum{color:var(--muted);font-size:12.5px}
+  .scanbar .sum b{color:var(--txt)}
+  table.scan{width:100%;border-collapse:collapse;font-size:12.5px}
+  table.scan th,table.scan td{padding:8px 10px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}
+  table.scan th{position:sticky;top:0;background:var(--panel);color:var(--muted);font-size:10.5px;
+    letter-spacing:.5px;text-transform:uppercase;z-index:5}
+  table.scan td.l,table.scan th.l{text-align:left}
+  table.scan tbody tr{cursor:pointer}
+  table.scan tbody tr:hover{background:rgba(56,189,248,.06)}
+  .rank{color:var(--dim);font-weight:700}
+  .sideCall{color:var(--green);font-weight:800}
+  .sidePut{color:var(--red);font-weight:800}
+  .gain{font-weight:800;color:var(--teal)}
+  .tk{font-weight:800;letter-spacing:.3px}
+  .edgeUp{color:var(--green)} .edgeDn{color:var(--red)}
+  .skips{color:var(--dim);font-size:11px;margin-top:12px;line-height:1.7}
 </style>
 </head>
 <body>
@@ -116,8 +140,13 @@
 </header>
 
 <main>
+  <div class="tabs">
+    <button class="tab active" id="tabCalc" data-view="calc">🎯 Calculator</button>
+    <button class="tab" id="tabScan" data-view="scan">📡 Opportunity Scanner</button>
+  </div>
   <div id="msg"></div>
 
+  <div id="calcView">
   <div class="hero">
     <div class="cbox">
       <div class="lab">🎯 Net Dealer Target "C"</div>
@@ -166,6 +195,30 @@
   </div>
 
   <div class="foot" id="foot"></div>
+  </div><!-- /calcView -->
+
+  <div id="scanView" style="display:none">
+    <div class="scanbar">
+      <button id="scanBtn" class="go">Run scan</button>
+      <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:inline-flex;gap:6px;align-items:center">
+        <input type="checkbox" id="scanRefresh" style="accent-color:var(--teal)"/> force refresh
+      </label>
+      <div class="sum" id="scanSum">Scans a curated set of ~50 liquid names, ranked by projected option %-gain if price pins to the C target by the nearest weekly.</div>
+    </div>
+    <div class="tblwrap">
+      <table class="scan">
+        <thead><tr>
+          <th class="l">#</th><th class="l">Ticker</th><th>Spot</th><th>C target</th><th>Edge %</th>
+          <th>Trade</th><th>Strike</th><th>Exp</th><th>Premium</th><th>Est. gain</th><th>Breakeven</th><th>OI</th>
+        </tr></thead>
+        <tbody id="scanBody"></tbody>
+      </table>
+    </div>
+    <div class="skips" id="scanSkips"></div>
+    <p class="hint" style="margin-top:14px">Est. gain assumes the underlying pins to C by expiry and the contract is worth
+      full intrinsic value there — an idealized projection, not a guarantee. Click any row to open it in the Calculator.
+      <b>Not financial advice.</b></p>
+  </div><!-- /scanView -->
 </main>
 
 <div class="modal" id="modal">
@@ -352,12 +405,81 @@ function drawChain(d){
 
 function msg(s){ $("msg").textContent = s||""; }
 
+// ---- scanner ----
+let SCANNED = false;
+function showView(v){
+  $("calcView").style.display = v==="calc" ? "" : "none";
+  $("scanView").style.display = v==="scan" ? "" : "none";
+  $("tabCalc").classList.toggle("active", v==="calc");
+  $("tabScan").classList.toggle("active", v==="scan");
+  if(v==="scan" && !SCANNED) runScan();
+}
+async function runScan(){
+  const btn=$("scanBtn"); btn.disabled=true; const prev=btn.textContent; btn.textContent="Scanning…";
+  $("scanSum").textContent="Scanning the liquid universe…"; msg("");
+  try{
+    const force = $("scanRefresh").checked ? "?refresh=true" : "";
+    const r = await fetch(api("/api/scan"+force)); const d = await r.json();
+    if(d.error){ msg(d.error); return; }
+    SCANNED = true; renderScan(d);
+  }catch(e){ msg("Scan failed: "+e); }
+  finally{ btn.disabled=false; btn.textContent=prev; }
+}
+function renderScan(d){
+  const cacheTxt = d.cached ? ` · cached ${d.age_seconds}s ago` : ` · ${d.elapsed_seconds}s`;
+  $("scanSum").innerHTML = `Scanned <b>${d.scanned}</b> · <b>${d.opportunities}</b> opportunities · `
+    + `<span style="color:var(--muted)">${d.mode.toUpperCase()}${cacheTxt}</span>`;
+  const body=$("scanBody"); body.innerHTML="";
+  (d.results||[]).forEach((r,i)=>{
+    const tr=document.createElement("tr");
+    tr.title="Open "+r.ticker+" in the Calculator";
+    const sideCls = r.direction==="CALL" ? "sideCall" : "sidePut";
+    const edgeCls = r.edge_pct>=0 ? "edgeUp" : "edgeDn";
+    const edgeArrow = r.edge_pct>=0 ? "▲" : "▼";
+    tr.innerHTML =
+      `<td class="l rank">${i+1}</td>`+
+      `<td class="l tk">${r.ticker}</td>`+
+      `<td>${fmt(r.spot)}</td>`+
+      `<td>${fmt(r.c_target)}</td>`+
+      `<td class="${edgeCls}">${edgeArrow} ${(Math.abs(r.edge_pct)*100).toFixed(2)}%</td>`+
+      `<td class="${sideCls}">${r.direction}</td>`+
+      `<td>${fmt(r.strike, r.strike>=100?0:1)}</td>`+
+      `<td style="color:var(--muted)">${r.expiry||"—"}</td>`+
+      `<td>$${fmt(r.premium)}</td>`+
+      `<td class="gain">+${(r.est_gain_pct*100).toFixed(0)}%</td>`+
+      `<td>${fmt(r.breakeven)}</td>`+
+      `<td style="color:var(--dim)">${fmtInt(r.contract_oi)}</td>`;
+    tr.addEventListener("click",()=>openInCalc(r));
+    body.appendChild(tr);
+  });
+  const sk = d.skipped||[];
+  $("scanSkips").textContent = sk.length
+    ? "Skipped ("+sk.length+"): "+sk.map(s=>s.ticker+" ("+s.reason+")").join(", ")
+    : "";
+}
+async function openInCalc(r){
+  showView("calc");
+  $("tickerInput").value = r.ticker; _lastTicker = r.ticker;
+  await loadExpiries();
+  if(r.expiry){
+    const esel=$("expirySel");
+    if(![...esel.options].some(o=>o.value===r.expiry)){
+      const o=document.createElement("option"); o.value=r.expiry; o.textContent=r.expiry; esel.appendChild(o);
+    }
+    esel.value=r.expiry;
+  }
+  calculate();
+}
+
 // ---- events ----
 let _lastTicker="";
 function onTickerChange(){ const t=currentTicker(); if(t && t!==_lastTicker){ _lastTicker=t; loadExpiries(); } }
 $("tickerInput").addEventListener("change",onTickerChange);   // fires on datalist pick / blur
 $("tickerInput").addEventListener("keydown",e=>{ if(e.key==="Enter"){ onTickerChange(); } });
 $("expirySel").addEventListener("change",()=>{ if($("expirySel").value) calculate(); });
+$("tabCalc").addEventListener("click",()=>showView("calc"));
+$("tabScan").addEventListener("click",()=>showView("scan"));
+$("scanBtn").addEventListener("click",runScan);
 $("goBtn").addEventListener("click",calculate);
 // api endpoint modal
 $("gear").addEventListener("click",()=>{ $("apiInput").value=apiBase(); $("modal").classList.add("on"); });

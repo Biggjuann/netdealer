@@ -9,7 +9,8 @@ import datetime as dt
 import math
 from typing import List, Optional, Tuple
 
-from app.net_dealer import StrikeRow
+from app.net_dealer import StrikeRow, bs_price
+from app.timeutil import t_years
 
 # A few anchor prices so well-known tickers look realistic; anything else gets a
 # deterministic price derived from its symbol.
@@ -51,23 +52,33 @@ class MockChainProvider:
     def get_expirations(self, ticker: str) -> List[str]:
         return _next_fridays(5)
 
+    def get_nearest_chain(self, ticker: str, within_days: int = 9,
+                          strike_count: Optional[int] = None):
+        """(expiry, rows, spot) for the nearest Friday — the scanner entry point."""
+        expiry = _next_fridays(1)[0]
+        rows, spot = self.get_chain(ticker, expiry, strike_count)
+        return expiry, rows, spot
+
     def get_chain(self, ticker: str, expiry: str,
                   strike_count: Optional[int] = None) -> Tuple[List[StrikeRow], Optional[float]]:
         spot = _anchor_price(ticker)
         step = _step(spot)
         n = (strike_count or 60) // 2
-        # Center the ladder on the nearest step to spot.
-        center = round(spot / step) * step
+        # Per-ticker OI skew so different names land C above/below/at spot — makes
+        # the scanner demo interesting instead of every C pinning to spot.
+        skew = (((sum(ord(c) for c in ticker.upper()) % 11) - 5) / 100.0)  # -0.05..+0.05
+        call_center, put_center = 0.03 + skew, -0.035 + skew
+        ty, _ = t_years(expiry)
+        ty = max(ty, 3.0 / 365.0)             # keep some extrinsic value in the demo
+        center = round(spot / step) * step    # ladder centered on nearest step to spot
         rows: List[StrikeRow] = []
         for i in range(-n, n + 1):
             k = round(center + i * step, 2)
             if k <= 0:
                 continue
             moneyness = (k - spot) / spot
-            # Call OI peaks a bit ABOVE spot; put OI peaks a bit BELOW spot.
-            call_oi = 4000 * math.exp(-((moneyness - 0.03) ** 2) / (2 * 0.05 ** 2))
-            put_oi = 4200 * math.exp(-((moneyness + 0.035) ** 2) / (2 * 0.05 ** 2))
-            # Round contract lots + a little structural noise via a cheap hash.
+            call_oi = 4000 * math.exp(-((moneyness - call_center) ** 2) / (2 * 0.05 ** 2))
+            put_oi = 4200 * math.exp(-((moneyness - put_center) ** 2) / (2 * 0.05 ** 2))
             jitter = ((int(abs(k) * 7) % 13) - 6) * 30
             call_oi = max(0.0, round(call_oi + jitter))
             put_oi = max(0.0, round(put_oi - jitter))
@@ -77,7 +88,7 @@ class MockChainProvider:
                 call_oi=call_oi, put_oi=put_oi,
                 call_volume=round(call_oi * 0.4), put_volume=round(put_oi * 0.4),
                 call_iv=round(iv, 4), put_iv=round(iv + 0.01, 4),
-                call_ask=round(max(0.05, (spot - k) + spot * iv * 0.04), 2),
-                put_ask=round(max(0.05, (k - spot) + spot * iv * 0.04), 2),
+                call_ask=round(max(0.05, bs_price(spot, k, ty, iv, True)), 2),
+                put_ask=round(max(0.05, bs_price(spot, k, ty, iv + 0.01, False)), 2),
             ))
         return rows, spot
