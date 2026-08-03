@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from app.config import settings
 from app.net_dealer import compute
 from app.providers.factory import build_provider
-from app.scanner import run_scan
+from app.scanner import rank_contracts, run_scan
 from app.timeutil import t_years
 
 logging.basicConfig(level=logging.INFO,
@@ -84,6 +84,15 @@ def net_dealer(ticker: str = Query(..., min_length=1),
     )
     payload = asdict(result)
     payload["mode"] = "live" if settings.live else "mock"
+
+    # Best option picks for THIS ticker/expiry: contracts that profit most if
+    # price pins to C. Side follows the dealer pull (C above spot -> calls).
+    side, picks = None, []
+    if result.c_target is not None and spot:
+        side = "CALL" if result.c_target > spot else "PUT"
+        picks = rank_contracts(rows, result.c_target, side, min_gain=0.0, limit=6)
+    payload["pick_side"] = side
+    payload["picks"] = picks
     return JSONResponse(payload)
 
 

@@ -163,6 +163,20 @@
     </div>
   </div>
 
+  <div class="panel" id="picksPanel" style="display:none">
+    <h3>Best Option Picks <span id="picksSide"></span></h3>
+    <p class="hint" id="picksHint">Contracts that profit most if price pins to the C target by expiry — ranked by projected %-gain (full intrinsic value at C), liquidity-filtered. <b>Not financial advice.</b></p>
+    <div class="tblwrap" style="max-height:none">
+      <table class="scan">
+        <thead><tr>
+          <th class="l">#</th><th>Trade</th><th>Strike</th><th>Premium</th>
+          <th>Est. gain</th><th>Breakeven</th><th>Intrinsic @ C</th><th>OI</th><th>Vol</th>
+        </tr></thead>
+        <tbody id="picksBody"></tbody>
+      </table>
+    </div>
+  </div>
+
   <div class="panel">
     <h3>Net Dealer Directional Profile</h3>
     <p class="hint">netDIR(P) = net delta of the open-interest book at price P, normalised by total OI.
@@ -315,8 +329,59 @@ function render(d){
   $("foot").innerHTML = `Total call OI ${fmtInt(d.total_call_oi)} · total put OI ${fmtInt(d.total_put_oi)} · `
     + `${d.mode.toUpperCase()} data · model: net-delta zero-crossing (Black-Scholes deltas over open interest).`;
 
+  renderPicks(d);
   drawProfile(d);
   drawChain(d);
+}
+
+function renderPicks(d){
+  const panel=$("picksPanel"), body=$("picksBody"); body.innerHTML="";
+  panel.style.display="";
+  const side=d.pick_side, picks=d.picks||[];
+  $("picksSide").innerHTML = side
+    ? `<span class="${side==='CALL'?'sideCall':'sidePut'}" style="font-size:12px">— buy ${side}S toward C</span>` : "";
+  $("picksHint").innerHTML = `Contracts that profit most if <b>${d.ticker}</b> pins to `
+    + `C = <b>${fmt(d.c_target)}</b> by <b>${d.expiry}</b> — ranked by projected %-gain `
+    + `(full intrinsic at C), liquidity-filtered. <b>Not financial advice.</b>`;
+  if(!picks.length){
+    body.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--dim);padding:16px">`
+      + `No positive-gain contracts at this expiry — C (${fmt(d.c_target)}) sits too close to spot `
+      + `(${fmt(d.spot)}) or the strikes toward C are too thin. Try a nearer/further expiry.</td></tr>`;
+    return;
+  }
+  const sideCls = side==="CALL" ? "sideCall" : "sidePut";
+  picks.forEach((p,i)=>{
+    const tr=document.createElement("tr");
+    tr.title="Highlight strike "+p.strike+" in the chain below";
+    tr.innerHTML =
+      `<td class="l rank">${i+1}</td>`+
+      `<td class="${sideCls}">${p.side}</td>`+
+      `<td>${fmt(p.strike, p.strike>=100?0:1)}</td>`+
+      `<td>$${fmt(p.premium)}</td>`+
+      `<td class="gain">+${(p.est_gain_pct*100).toFixed(0)}%</td>`+
+      `<td>${fmt(p.breakeven)}</td>`+
+      `<td style="color:var(--muted)">$${fmt(p.intrinsic_at_c)}</td>`+
+      `<td style="color:var(--dim)">${fmtInt(p.contract_oi)}</td>`+
+      `<td style="color:var(--dim)">${fmtInt(p.contract_volume)}</td>`;
+    tr.addEventListener("click",()=>highlightStrike(p.strike));
+    body.appendChild(tr);
+  });
+}
+
+function highlightStrike(strike){
+  // find the chain row whose center strike cell matches and flash it
+  const cells=document.querySelectorAll("#chainBody .strikeCol");
+  for(const c of cells){
+    const val=parseFloat(c.textContent.replace(/,/g,""));
+    if(Math.abs(val-strike)<0.001){
+      const tr=c.closest("tr");
+      tr.scrollIntoView({behavior:"smooth",block:"center"});
+      tr.style.transition="background .2s"; const old=tr.style.background;
+      tr.style.background="rgba(34,211,183,.28)";
+      setTimeout(()=>{tr.style.background=old;},1100);
+      break;
+    }
+  }
 }
 
 function drawProfile(d){

@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.config import settings
 from app.net_dealer import StrikeRow, bs_price
 from app.providers.mock import MockChainProvider
-from app.scanner import _best_contract, evaluate, run_scan
+from app.scanner import _best_contract, evaluate, rank_contracts, run_scan
 
 
 def test_bs_price_sane():
@@ -33,6 +33,25 @@ def test_best_contract_picks_positive_gain_side():
     assert k < c, "winning call strike should finish ITM at C"
     assert abs(be - (k + ask)) < 1e-6
     print(f"ok  best contract: K={k} ask={ask:.2f} gain={gain*100:.0f}% be={be:.2f}")
+
+
+def test_rank_contracts_topn_sorted():
+    # C above spot -> rank calls; expect several picks, sorted by gain desc,
+    # all finishing ITM at C.
+    rows = [StrikeRow(strike=k, call_oi=5000, put_oi=5000, call_iv=0.3, put_iv=0.3,
+                      call_ask=max(0.05, bs_price(100, k, 20/365, 0.3, True)),
+                      put_ask=max(0.05, bs_price(100, k, 20/365, 0.3, False)))
+            for k in range(90, 116, 1)]
+    picks = rank_contracts(rows, 112.0, "CALL", min_gain=0.0, limit=5)
+    assert 1 <= len(picks) <= 5
+    gains = [p["est_gain_pct"] for p in picks]
+    assert gains == sorted(gains, reverse=True)
+    for p in picks:
+        assert p["side"] == "CALL"
+        assert p["strike"] < 112.0            # finishes ITM at C
+        assert p["est_gain_pct"] >= 0
+        assert p["intrinsic_at_c"] > 0
+    print(f"ok  rank_contracts top-{len(picks)}: gains {[round(g*100) for g in gains]}")
 
 
 def test_best_contract_respects_liquidity_floor():

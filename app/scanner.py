@@ -59,14 +59,20 @@ class ScanRow:
     skip: Optional[str] = None       # reason it is not a ranked opportunity
 
 
-def _best_contract(rows, c_target: float, side: str):
-    """Pick the liquid, ITM-at-C strike with the highest projected pin gain.
+def rank_contracts(rows, c_target: float, side: str, min_gain: Optional[float] = None,
+                   min_oi: Optional[float] = None, min_ask: Optional[float] = None,
+                   limit: Optional[int] = None) -> List[dict]:
+    """Rank one side's strikes by projected %-gain if price pins to C.
 
-    Only contracts that clear the liquidity floors AND project at least the
-    minimum gain are eligible, so a real (positive) opportunity is required —
-    not merely the least-bad deep-ITM strike.
+    A contract is eligible when it (a) finishes in-the-money at C, (b) clears the
+    liquidity floors (OI / ask), and (c) projects at least ``min_gain``. Returned
+    sorted by est_gain descending. Shared by the scanner (single best pick) and
+    the calculator (top-N picks for the selected ticker/expiry).
     """
-    best = None
+    mg = settings.scan_min_gain_pct if min_gain is None else min_gain
+    moi = settings.scan_min_oi if min_oi is None else min_oi
+    mask = settings.scan_min_ask if min_ask is None else min_ask
+    out: List[dict] = []
     for row in rows:
         if side == "CALL":
             oi, vol, ask, k = row.call_oi, row.call_volume, row.call_ask, row.strike
@@ -76,15 +82,33 @@ def _best_contract(rows, c_target: float, side: str):
             oi, vol, ask, k = row.put_oi, row.put_volume, row.put_ask, row.strike
             intrinsic = max(k - c_target, 0.0)
             breakeven = k - ask
-        if intrinsic <= 0 or ask < settings.scan_min_ask or oi < settings.scan_min_oi:
+        if intrinsic <= 0 or ask < mask or oi < moi:
             continue
         gain = (intrinsic - ask) / ask
-        if gain < settings.scan_min_gain_pct:
+        if gain < mg:
             continue
-        cand = (gain, k, ask, oi, vol, breakeven)
-        if best is None or gain > best[0]:
-            best = cand
-    return best
+        out.append({
+            "side": side,
+            "strike": k,
+            "premium": round(ask, 2),
+            "est_gain_pct": round(min(gain, settings.scan_max_gain_pct), 4),
+            "breakeven": round(breakeven, 2),
+            "intrinsic_at_c": round(intrinsic, 2),
+            "contract_oi": oi,
+            "contract_volume": vol,
+        })
+    out.sort(key=lambda d: d["est_gain_pct"], reverse=True)
+    return out[:limit] if limit else out
+
+
+def _best_contract(rows, c_target: float, side: str):
+    """The single highest-projected-gain liquid contract (scanner's pick)."""
+    ranked = rank_contracts(rows, c_target, side)
+    if not ranked:
+        return None
+    b = ranked[0]
+    return (b["est_gain_pct"], b["strike"], b["premium"],
+            b["contract_oi"], b["contract_volume"], b["breakeven"])
 
 
 def evaluate(provider, ticker: str) -> ScanRow:

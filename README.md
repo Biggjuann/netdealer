@@ -70,7 +70,10 @@ between the two walls — the "crush" zone in the framework.
   (~517 symbols, bundled in [`app/universe.py`](app/universe.py)); the box also
   accepts any other symbol Schwab recognises.
 * **Expiry** — auto-populates from the live chain (mock mode lists the next 5 Fridays).
-* **Calculate C** — returns the target and renders the profile + chain.
+* **Calculate C** — returns the target, a **Best Option Picks** ladder (the
+  contracts that profit most if this ticker pins to C by the selected expiry,
+  ranked by projected %-gain and liquidity-filtered — click a pick to highlight
+  its strike in the chain), and the netDIR profile + full chain.
 
 Data is **live Schwab** by default (`DATA_MODE=live`). Set `DATA_MODE=mock` only
 for an offline demo.
@@ -215,7 +218,8 @@ GET /api/expiries?ticker=MU            -> { "expiries": ["2026-08-07", ...] }
 GET /api/net-dealer?ticker=MU&expiry=2026-08-07
     -> { c_target, c_netdir, max_pain, call_wall, put_wall,
          long_avg, short_avg, spot, dte, rows: [{strike, call_oi, put_oi,
-         netdir, ...}], ... }
+         netdir, ...}], pick_side, picks: [{side, strike, premium,
+         est_gain_pct, breakeven, intrinsic_at_c, contract_oi, ...}], ... }
 GET /api/scan[?refresh=true]           -> { scanned, opportunities, results:
          [{ticker, spot, c_target, edge_pct, direction, strike, premium,
            est_gain_pct, breakeven, expiry, ...}], skipped: [...] }
