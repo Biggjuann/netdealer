@@ -15,6 +15,7 @@ import httpx
 
 from app.config import settings
 from app.net_dealer import StrikeRow
+from app.range_stats import Candle
 
 log = logging.getLogger("schwab")
 
@@ -170,3 +171,33 @@ class SchwabChainClient:
             return None, [], None
         expiry = exps[0]
         return expiry, self._rows_for_expiry(data, expiry), self._spot_from(data)
+
+    def daily_history(self, symbol: str, days: int) -> List[Candle]:
+        """Last ``days`` completed daily candles (for range stats).
+
+        Vendored from Biggjuann/Range app/schwab.py. Returns [] on failure so the
+        scanner degrades gracefully (range simply reads as unavailable).
+        """
+        symbol = symbol.strip().upper()
+        need = max(days, 1)
+        years = max(1, (need // 240) + 1)
+        r = self._get(f"{self.base}/marketdata/v1/pricehistory", params={
+            "symbol": symbol, "periodType": "year", "period": years,
+            "frequencyType": "daily", "frequency": 1, "needExtendedHoursData": "false",
+        })
+        if r is None or r.status_code != 200:
+            log.warning("schwab pricehistory %s -> %s", symbol, r.status_code if r else "no response")
+            return []
+        try:
+            body = r.json()
+        except Exception as exc:  # pragma: no cover - network
+            log.warning("schwab pricehistory %s bad JSON: %s", symbol, exc)
+            return []
+        if body.get("empty") or not body.get("candles"):
+            return []
+        candles = [Candle.from_schwab(c) for c in body["candles"]
+                   if c.get("high") is not None and c.get("low") is not None]
+        candles.sort(key=lambda c: c.date)
+        today = dt.datetime.now(tz=dt.timezone.utc).date()
+        completed = [c for c in candles if c.date < today] or candles
+        return completed[-need:]

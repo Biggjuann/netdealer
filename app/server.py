@@ -97,10 +97,16 @@ def net_dealer(ticker: str = Query(..., min_length=1),
 
 
 @app.get("/api/scan")
-def scan(refresh: bool = Query(False, description="bypass the short-lived cache")) -> JSONResponse:
-    """Rank the curated liquid universe by projected option %-gain to the C pin."""
+def scan(refresh: bool = Query(False, description="bypass the short-lived cache"),
+         range_filter: bool = Query(None, description="override the 30d range achievability filter")
+         ) -> JSONResponse:
+    """Rank the curated liquid universe by projected option %-gain to the C pin.
+
+    By default only surfaces tickers whose move to C is within their proven
+    ~30-day range (Biggjuann/Range methodology); pass range_filter=false to see all.
+    """
     try:
-        payload = run_scan(provider, use_cache=not refresh)
+        payload = run_scan(provider, use_cache=not refresh, range_filter=range_filter)
     except Exception as exc:  # pragma: no cover - defensive
         log.warning("scan failed: %s", exc)
         return JSONResponse({"error": f"scan failed: {exc}"}, status_code=502)

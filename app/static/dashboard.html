@@ -119,6 +119,12 @@
   .tk{font-weight:800;letter-spacing:.3px}
   .edgeUp{color:var(--green)} .edgeDn{color:var(--red)}
   .skips{color:var(--dim);font-size:11px;margin-top:12px;line-height:1.7}
+  .scanopt{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:inline-flex;gap:6px;align-items:center;cursor:pointer}
+  .reach{font-size:9.5px;font-weight:800;letter-spacing:.4px;padding:2px 7px;border-radius:6px}
+  .reach.mean{background:rgba(52,211,153,.16);color:var(--green)}
+  .reach.max{background:rgba(251,191,36,.16);color:var(--amber)}
+  .reach.out{background:rgba(248,113,113,.16);color:var(--red)}
+  .reach.na{background:rgba(126,138,163,.16);color:var(--muted)}
 </style>
 </head>
 <body>
@@ -214,16 +220,18 @@
   <div id="scanView" style="display:none">
     <div class="scanbar">
       <button id="scanBtn" class="go">Run scan</button>
-      <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:inline-flex;gap:6px;align-items:center">
-        <input type="checkbox" id="scanRefresh" style="accent-color:var(--teal)"/> force refresh
+      <label class="scanopt" title="Only show tickers whose move to C is within their proven ~30-day range (Biggjuann/Range)">
+        <input type="checkbox" id="scanRange" checked style="accent-color:var(--teal)"/> 30d range filter
       </label>
-      <div class="sum" id="scanSum">Scans a curated set of ~50 liquid names, ranked by projected option %-gain if price pins to the C target by the nearest weekly.</div>
+      <label class="scanopt"><input type="checkbox" id="scanRefresh" style="accent-color:var(--teal)"/> force refresh</label>
+      <div class="sum" id="scanSum">Scans a curated set of ~50 liquid names, ranked by projected option %-gain if price pins to the C target by the nearest weekly — filtered to moves within each ticker's proven 30-day range.</div>
     </div>
     <div class="tblwrap">
       <table class="scan">
         <thead><tr>
           <th class="l">#</th><th class="l">Ticker</th><th>Spot</th><th>C target</th><th>Edge %</th>
           <th>Trade</th><th>Strike</th><th>Exp</th><th>Premium</th><th>Est. gain</th><th>Breakeven</th><th>OI</th>
+          <th>30d ADR / Max</th><th>Reach</th>
         </tr></thead>
         <tbody id="scanBody"></tbody>
       </table>
@@ -483,17 +491,27 @@ async function runScan(){
   const btn=$("scanBtn"); btn.disabled=true; const prev=btn.textContent; btn.textContent="Scanning…";
   $("scanSum").textContent="Scanning the liquid universe…"; msg("");
   try{
-    const force = $("scanRefresh").checked ? "?refresh=true" : "";
-    const r = await fetch(api("/api/scan"+force)); const d = await r.json();
+    const qs = "?range_filter="+($("scanRange").checked?"true":"false")
+      + ($("scanRefresh").checked ? "&refresh=true" : "");
+    const r = await fetch(api("/api/scan"+qs)); const d = await r.json();
     if(d.error){ msg(d.error); return; }
     SCANNED = true; renderScan(d);
   }catch(e){ msg("Scan failed: "+e); }
   finally{ btn.disabled=false; btn.textContent=prev; }
 }
+function reachBadge(conf){
+  if(conf==="within-mean") return `<span class="reach mean" title="move to C is within the 30d MEAN daily range">MEAN</span>`;
+  if(conf==="within-max")  return `<span class="reach max" title="within the 30d MAX (widest) daily range, above the mean">MAX</span>`;
+  if(conf==="out-of-range")return `<span class="reach out" title="move to C exceeds the ticker's proven 30d range">OUT</span>`;
+  return `<span class="reach na" title="range data unavailable">n/a</span>`;
+}
 function renderScan(d){
   const cacheTxt = d.cached ? ` · cached ${d.age_seconds}s ago` : ` · ${d.elapsed_seconds}s`;
-  $("scanSum").innerHTML = `Scanned <b>${d.scanned}</b> · <b>${d.opportunities}</b> opportunities · `
-    + `<span style="color:var(--muted)">${d.mode.toUpperCase()}${cacheTxt}</span>`;
+  const filtTxt = d.range_filter
+    ? ` · <span style="color:var(--amber)">${d.range_filtered_out} out-of-range filtered</span>`
+    : ` · <span style="color:var(--muted)">range filter off</span>`;
+  $("scanSum").innerHTML = `Scanned <b>${d.scanned}</b> · <b>${d.opportunities}</b> opportunities`
+    + filtTxt + ` · <span style="color:var(--muted)">${d.mode.toUpperCase()}${cacheTxt}</span>`;
   const body=$("scanBody"); body.innerHTML="";
   (d.results||[]).forEach((r,i)=>{
     const tr=document.createElement("tr");
@@ -501,6 +519,8 @@ function renderScan(d){
     const sideCls = r.direction==="CALL" ? "sideCall" : "sidePut";
     const edgeCls = r.edge_pct>=0 ? "edgeUp" : "edgeDn";
     const edgeArrow = r.edge_pct>=0 ? "▲" : "▼";
+    const adr = r.adr_percent!=null ? r.adr_percent.toFixed(1)+"%" : "—";
+    const mx  = r.max_range_percent!=null ? r.max_range_percent.toFixed(1)+"%" : "—";
     tr.innerHTML =
       `<td class="l rank">${i+1}</td>`+
       `<td class="l tk">${r.ticker}</td>`+
@@ -513,7 +533,9 @@ function renderScan(d){
       `<td>$${fmt(r.premium)}</td>`+
       `<td class="gain">+${(r.est_gain_pct*100).toFixed(0)}%</td>`+
       `<td>${fmt(r.breakeven)}</td>`+
-      `<td style="color:var(--dim)">${fmtInt(r.contract_oi)}</td>`;
+      `<td style="color:var(--dim)">${fmtInt(r.contract_oi)}</td>`+
+      `<td style="color:var(--muted)">${adr} / ${mx}</td>`+
+      `<td>${reachBadge(r.range_conf)}</td>`;
     tr.addEventListener("click",()=>openInCalc(r));
     body.appendChild(tr);
   });
@@ -545,6 +567,7 @@ $("expirySel").addEventListener("change",()=>{ if($("expirySel").value) calculat
 $("tabCalc").addEventListener("click",()=>showView("calc"));
 $("tabScan").addEventListener("click",()=>showView("scan"));
 $("scanBtn").addEventListener("click",runScan);
+$("scanRange").addEventListener("change",()=>{ if(SCANNED) runScan(); });
 $("goBtn").addEventListener("click",calculate);
 // api endpoint modal
 $("gear").addEventListener("click",()=>{ $("apiInput").value=apiBase(); $("modal").classList.add("on"); });

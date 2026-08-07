@@ -31,6 +31,11 @@ jobs:
           DATA_MODE: mock
         run: python tests/test_scanner.py
 
+      - name: Run range-filter tests
+        env:
+          DATA_MODE: mock
+        run: python tests/test_range.py
+
       - name: Smoke-test the app boots (mock mode)
         env:
           DATA_MODE: mock

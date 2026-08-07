@@ -10,6 +10,7 @@ import math
 from typing import List, Optional, Tuple
 
 from app.net_dealer import StrikeRow, bs_price
+from app.range_stats import Candle
 from app.timeutil import t_years
 
 # A few anchor prices so well-known tickers look realistic; anything else gets a
@@ -58,6 +59,31 @@ class MockChainProvider:
         expiry = _next_fridays(1)[0]
         rows, spot = self.get_chain(ticker, expiry, strike_count)
         return expiry, rows, spot
+
+    def daily_history(self, ticker: str, days: int) -> List[Candle]:
+        """Deterministic synthetic daily candles with a realistic ADR + a clear
+        widest session, so the range filter works offline / in CI."""
+        spot = _anchor_price(ticker)
+        n = max(days, 1)
+        h = sum(ord(c) for c in ticker.upper())
+        base = 0.02 + (h % 5) / 100.0            # typical daily range 2%..6%
+        widest_i = max(2, n // 3)
+        today = dt.date.today()
+        out: List[Candle] = []
+        for i in range(n, 0, -1):
+            w = ((h + i * 7) % 11) / 10.0         # 0..1.0 wiggle
+            rng_pct = base * 2.0 if i == widest_i else base * (0.6 + 0.8 * w)
+            close = spot * (1 + ((((h + i) % 7) - 3) / 100.0) * 0.2)
+            rng = close * rng_pct
+            out.append(Candle(
+                date=today - dt.timedelta(days=i),
+                open=round(close - rng * 0.1, 2),
+                high=round(close + rng * 0.5, 2),
+                low=round(close - rng * 0.5, 2),
+                close=round(close, 2),
+                volume=1_000_000,
+            ))
+        return out
 
     def get_chain(self, ticker: str, expiry: str,
                   strike_count: Optional[int] = None) -> Tuple[List[StrikeRow], Optional[float]]:

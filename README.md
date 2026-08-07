@@ -109,6 +109,34 @@ skipped. Click any row to open that ticker in the Calculator. The scan runs with
 a small thread pool and a short result cache (`SCAN_*` knobs in
 [`.env.example`](.env.example)).
 
+### Range achievability filter (Biggjuann/Range)
+
+The scanner further filters to trades that are **actually reachable**: it checks
+whether the required move to C is within what the ticker has *proven it can
+travel* over the past ~30 days, using the
+[**Range**](https://github.com/Biggjuann/Range) methodology (vendored into
+[`app/range_stats.py`](app/range_stats.py) — same shared Schwab token, no extra
+service to run). For each candidate it pulls 30 days of daily candles and
+computes:
+
+* **ADR** — mean daily range (`high − low`), the *mean* range;
+* **Max** — the widest single-day range in the window, the *max* range.
+
+The move to C is scaled to the horizon (`achievable = daily range × trading-days
+-to-expiry × RANGE_REACH_MULT`) and bucketed:
+
+| Reach badge | Meaning |
+|---|---|
+| **MEAN** 🟢 | move to C ≤ the 30d **mean** daily range — very reachable |
+| **MAX** 🟡 | above the mean but ≤ the 30d **max** (widest) daily range — reachable on a big day |
+| **OUT** 🔴 | beyond the ticker's proven 30d range — **filtered out by default** |
+
+So the scanner surfaces the outsized-gain setups whose move is still *within
+reason* of the ticker's demonstrated range. Toggle it with the **30d range
+filter** checkbox (or `RANGE_FILTER` / `?range_filter=false`); tune the strictness
+with `RANGE_REACH_MULT`. If range data is briefly unavailable the row fails open,
+flagged **n/a**, rather than being dropped.
+
 > The projected gain assumes the underlying pins **exactly** to C at expiry and
 > the contract realises full intrinsic value — an idealized upper-bound, not a
 > forecast. **Not financial advice.**
@@ -194,7 +222,8 @@ smoke-test on every push.
 ```
 app/
   net_dealer.py         # the "C" engine — pure, unit-tested math (+ BS price/delta)
-  scanner.py            # opportunity scanner — ranks liquid names by %-gain to C
+  scanner.py            # opportunity scanner — ranks + range-filters liquid names
+  range_stats.py        # 30d ADR / widest range (vendored Biggjuann/Range method)
   universe.py           # bundled S&P 500 + Nasdaq-100 list, and the LIQUID scan set
   timeutil.py           # time-to-expiry helper
   config.py             # env-driven settings (shared-token + scan vars)
@@ -208,6 +237,7 @@ app/
 docs/index.html         # same UI, for GitHub Pages
 tests/test_net_dealer.py
 tests/test_scanner.py
+tests/test_range.py
 ```
 
 ## API
@@ -220,7 +250,9 @@ GET /api/net-dealer?ticker=MU&expiry=2026-08-07
          long_avg, short_avg, spot, dte, rows: [{strike, call_oi, put_oi,
          netdir, ...}], pick_side, picks: [{side, strike, premium,
          est_gain_pct, breakeven, intrinsic_at_c, contract_oi, ...}], ... }
-GET /api/scan[?refresh=true]           -> { scanned, opportunities, results:
+GET /api/scan[?refresh=true][&range_filter=false]
+    -> { scanned, opportunities, range_filter, range_filtered_out, results:
          [{ticker, spot, c_target, edge_pct, direction, strike, premium,
-           est_gain_pct, breakeven, expiry, ...}], skipped: [...] }
+           est_gain_pct, breakeven, expiry, required_move_pct, adr_percent,
+           max_range_percent, range_conf, ...}], skipped: [...] }
 ```

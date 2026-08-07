@@ -21,6 +21,10 @@ except Exception:  # pragma: no cover - dotenv optional
     pass
 
 
+def _bool(name: str, default: bool) -> bool:
+    return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _int(name: str, default: int) -> int:
     try:
         return int(float(os.getenv(name, default)))
@@ -97,6 +101,20 @@ class Settings:
     scan_within_days: int = field(default_factory=lambda: _int("SCAN_WITHIN_DAYS", 9))
     scan_workers: int = field(default_factory=lambda: _int("SCAN_WORKERS", 8))
     scan_cache_seconds: int = field(default_factory=lambda: _int("SCAN_CACHE_SECONDS", 60))
+
+    # ----- Range achievability filter (Biggjuann/Range methodology) --------
+    # Drop scan candidates whose required move to C exceeds what the ticker has
+    # proven it can travel over the recent window — so surfaced trades are
+    # "within reason" of the ticker's demonstrated range.
+    range_filter: bool = field(default_factory=lambda: _bool("RANGE_FILTER", True))
+    range_days: int = field(default_factory=lambda: _int("RANGE_DAYS", 30))
+    # Achievable move by expiry = (daily range) × horizon_days × this multiplier.
+    # Raise to loosen the filter, lower to tighten.
+    range_reach_mult: float = field(default_factory=lambda: _float("RANGE_REACH_MULT", 1.0))
+    # Cap the horizon (trading days to expiry) used to scale the daily range.
+    range_max_horizon: float = field(default_factory=lambda: _float("RANGE_MAX_HORIZON", 5.0))
+    # Range/daily-history changes slowly — cache it longer than the chain scan.
+    range_cache_seconds: int = field(default_factory=lambda: _int("RANGE_CACHE_SECONDS", 3600))
 
     # ----- Web -------------------------------------------------------------
     # CORS origins allowed to call the API (for a GitHub Pages front-end that
