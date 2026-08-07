@@ -53,12 +53,21 @@ class MockChainProvider:
     def get_expirations(self, ticker: str) -> List[str]:
         return _next_fridays(5)
 
-    def get_nearest_chain(self, ticker: str, within_days: int = 9,
-                          strike_count: Optional[int] = None):
-        """(expiry, rows, spot) for the nearest Friday — the scanner entry point."""
-        expiry = _next_fridays(1)[0]
+    def get_weekly_chain(self, ticker: str, week_index: int = 0,
+                         within_days: Optional[int] = None,
+                         strike_count: Optional[int] = None):
+        """(expiry, rows, spot) for the ``week_index``-th upcoming Friday."""
+        fridays = _next_fridays(week_index + 1)
+        if len(fridays) <= week_index:
+            return None, [], None
+        expiry = fridays[week_index]
         rows, spot = self.get_chain(ticker, expiry, strike_count)
         return expiry, rows, spot
+
+    def get_nearest_chain(self, ticker: str, within_days: int = 9,
+                          strike_count: Optional[int] = None):
+        """Backward-compatible alias for the nearest (week 0) expiry."""
+        return self.get_weekly_chain(ticker, 0, within_days, strike_count)
 
     def daily_history(self, ticker: str, days: int) -> List[Candle]:
         """Deterministic synthetic daily candles with a realistic ADR + a clear

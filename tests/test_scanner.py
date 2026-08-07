@@ -90,6 +90,25 @@ def test_run_scan_ranks_by_gain_desc():
           f"top gain {gains[0]*100:.0f}%" if gains else "ok  run_scan (no opps)")
 
 
+def test_run_scan_multiweek():
+    prov = MockChainProvider()
+    tickers = ["NVDA", "AAPL", "TSLA"]
+    both = run_scan(prov, tickers=tickers, use_cache=False, weeks=[0, 1])
+    assert both["weeks"] == [0, 1]
+    assert both["evaluations"] == len(tickers) * 2
+    # both week indices appear, and each row carries the expiry for its week
+    idxs = {r["week_index"] for r in both["results"]}
+    assert idxs <= {0, 1}
+    # next week's expiry is strictly later than this week's for the same ticker
+    by_ticker = {}
+    for r in both["results"]:
+        by_ticker.setdefault(r["ticker"], {})[r["week_index"]] = r["expiry"]
+    for t, wk in by_ticker.items():
+        if 0 in wk and 1 in wk:
+            assert wk[1] > wk[0], f"{t}: next-week expiry {wk[1]} must be after {wk[0]}"
+    print(f"ok  multiweek: {both['evaluations']} evaluations across weeks {both['weeks']}")
+
+
 def test_run_scan_cache():
     prov = MockChainProvider()
     tickers = ["NVDA", "AAPL"]

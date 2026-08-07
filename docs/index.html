@@ -220,6 +220,14 @@
   <div id="scanView" style="display:none">
     <div class="scanbar">
       <button id="scanBtn" class="go">Run scan</button>
+      <label class="scanopt" title="Which weekly expiry to scan">
+        Expiry
+        <select id="scanWeeks" style="padding:5px 8px">
+          <option value="this">This week</option>
+          <option value="next">Next week</option>
+          <option value="both">Both weeks</option>
+        </select>
+      </label>
       <label class="scanopt" title="Only show tickers whose move to C is within their proven ~30-day range (Biggjuann/Range)">
         <input type="checkbox" id="scanRange" checked style="accent-color:var(--teal)"/> 30d range filter
       </label>
@@ -491,7 +499,8 @@ async function runScan(){
   const btn=$("scanBtn"); btn.disabled=true; const prev=btn.textContent; btn.textContent="Scanning…";
   $("scanSum").textContent="Scanning the liquid universe…"; msg("");
   try{
-    const qs = "?range_filter="+($("scanRange").checked?"true":"false")
+    const qs = "?weeks="+$("scanWeeks").value
+      + "&range_filter="+($("scanRange").checked?"true":"false")
       + ($("scanRefresh").checked ? "&refresh=true" : "");
     const r = await fetch(api("/api/scan"+qs)); const d = await r.json();
     if(d.error){ msg(d.error); return; }
@@ -510,7 +519,11 @@ function renderScan(d){
   const filtTxt = d.range_filter
     ? ` · <span style="color:var(--amber)">${d.range_filtered_out} out-of-range filtered</span>`
     : ` · <span style="color:var(--muted)">range filter off</span>`;
-  $("scanSum").innerHTML = `Scanned <b>${d.scanned}</b> · <b>${d.opportunities}</b> opportunities`
+  const multiWk = (d.weeks||[0]).length > 1;
+  const scope = multiWk
+    ? `Scanned <b>${d.scanned}</b> tickers × ${d.weeks.length} weeks (<b>${d.evaluations}</b> expiries)`
+    : `Scanned <b>${d.scanned}</b>`;
+  $("scanSum").innerHTML = scope + ` · <b>${d.opportunities}</b> opportunities`
     + filtTxt + ` · <span style="color:var(--muted)">${d.mode.toUpperCase()}${cacheTxt}</span>`;
   const body=$("scanBody"); body.innerHTML="";
   (d.results||[]).forEach((r,i)=>{
@@ -529,7 +542,7 @@ function renderScan(d){
       `<td class="${edgeCls}">${edgeArrow} ${(Math.abs(r.edge_pct)*100).toFixed(2)}%</td>`+
       `<td class="${sideCls}">${r.direction}</td>`+
       `<td>${fmt(r.strike, r.strike>=100?0:1)}</td>`+
-      `<td style="color:var(--muted)">${r.expiry||"—"}</td>`+
+      `<td style="color:var(--muted)">${r.expiry||"—"}${multiWk?` <span class="reach na" style="padding:1px 5px">W${(r.week_index||0)+1}</span>`:""}</td>`+
       `<td>$${fmt(r.premium)}</td>`+
       `<td class="gain">+${(r.est_gain_pct*100).toFixed(0)}%</td>`+
       `<td>${fmt(r.breakeven)}</td>`+
@@ -568,6 +581,7 @@ $("tabCalc").addEventListener("click",()=>showView("calc"));
 $("tabScan").addEventListener("click",()=>showView("scan"));
 $("scanBtn").addEventListener("click",runScan);
 $("scanRange").addEventListener("change",()=>{ if(SCANNED) runScan(); });
+$("scanWeeks").addEventListener("change",()=>{ if(SCANNED) runScan(); });
 $("goBtn").addEventListener("click",calculate);
 // api endpoint modal
 $("gear").addEventListener("click",()=>{ $("apiInput").value=apiBase(); $("modal").classList.add("on"); });

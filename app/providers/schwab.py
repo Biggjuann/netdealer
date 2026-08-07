@@ -152,25 +152,31 @@ class SchwabChainClient:
             return [], None
         return self._rows_for_expiry(data, expiry), self._spot_from(data)
 
-    def get_nearest_chain(self, ticker: str, within_days: int = 9,
-                          strike_count: Optional[int] = None
-                          ) -> Tuple[Optional[str], List[StrikeRow], Optional[float]]:
-        """Nearest expiry within ``within_days`` in a SINGLE chains call.
-
-        Returns (expiry, rows, spot). Used by the scanner to keep the request
-        count to one per ticker.
-        """
+    def get_weekly_chain(self, ticker: str, week_index: int = 0,
+                         within_days: Optional[int] = None,
+                         strike_count: Optional[int] = None
+                         ) -> Tuple[Optional[str], List[StrikeRow], Optional[float]]:
+        """The ``week_index``-th nearest expiry (0 = this week, 1 = next week…)
+        in a SINGLE chains call. Returns (expiry, rows, spot)."""
         sc = strike_count or settings.strike_count
+        # Widen the window so it always spans far enough to include the target week.
+        within = within_days if within_days is not None else settings.scan_within_days + 7 * week_index
         today = dt.date.today()
-        end = today + dt.timedelta(days=within_days)
+        end = today + dt.timedelta(days=within)
         data = self._chains_raw(ticker, today.isoformat(), end.isoformat(), strike_count=sc)
         if not data:
             return None, [], None
         exps = self._expiries_in(data)
-        if not exps:
+        if len(exps) <= week_index:
             return None, [], None
-        expiry = exps[0]
+        expiry = exps[week_index]
         return expiry, self._rows_for_expiry(data, expiry), self._spot_from(data)
+
+    def get_nearest_chain(self, ticker: str, within_days: int = 9,
+                          strike_count: Optional[int] = None
+                          ) -> Tuple[Optional[str], List[StrikeRow], Optional[float]]:
+        """Backward-compatible alias for the nearest (week 0) expiry."""
+        return self.get_weekly_chain(ticker, 0, within_days, strike_count)
 
     def daily_history(self, symbol: str, days: int) -> List[Candle]:
         """Last ``days`` completed daily candles (for range stats).

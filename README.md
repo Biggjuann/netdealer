@@ -103,6 +103,11 @@ price pins to C** by the nearest weekly. For each ticker it:
 
    which naturally lands on the cheap-but-still-finishes-ITM sweet spot.
 
+Pick the expiry with the **Expiry** selector — **This week** (nearest weekly),
+**Next week**, or **Both** (each ticker is scanned for both expiries and ranked
+together; next week's extra days give the move to C more room to develop and a
+wider range budget).
+
 Results are sorted by projected gain (highest first); only real, positive-gain,
 tradeable opportunities are surfaced — flat-edge or illiquid names are listed as
 skipped. Click any row to open that ticker in the Calculator. The scan runs with
@@ -250,8 +255,8 @@ GET /api/net-dealer?ticker=MU&expiry=2026-08-07
          long_avg, short_avg, spot, dte, rows: [{strike, call_oi, put_oi,
          netdir, ...}], pick_side, picks: [{side, strike, premium,
          est_gain_pct, breakeven, intrinsic_at_c, contract_oi, ...}], ... }
-GET /api/scan[?refresh=true][&range_filter=false]
-    -> { scanned, opportunities, range_filter, range_filtered_out, results:
+GET /api/scan[?weeks=this|next|both][&refresh=true][&range_filter=false]
+    -> { scanned, weeks, evaluations, opportunities, range_filter, range_filtered_out, results:
          [{ticker, spot, c_target, edge_pct, direction, strike, premium,
            est_gain_pct, breakeven, expiry, required_move_pct, adr_percent,
            max_range_percent, range_conf, ...}], skipped: [...] }

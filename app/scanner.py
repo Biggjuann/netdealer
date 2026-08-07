@@ -48,6 +48,7 @@ class ScanRow:
     direction: Optional[str]         # "CALL" / "PUT"
     expiry: Optional[str]
     dte: Optional[float]
+    week_index: int = 0              # 0 = this week, 1 = next week…
     strike: Optional[float] = None
     premium: Optional[float] = None  # ask paid
     est_gain_pct: Optional[float] = None   # projected % gain at the C pin
@@ -165,17 +166,19 @@ def _best_contract(rows, c_target: float, side: str):
             b["contract_oi"], b["contract_volume"], b["breakeven"])
 
 
-def evaluate(provider, ticker: str) -> ScanRow:
+def evaluate(provider, ticker: str, week_index: int = 0) -> ScanRow:
     try:
-        expiry, rows, spot = provider.get_nearest_chain(
-            ticker, within_days=settings.scan_within_days, strike_count=settings.strike_count)
+        expiry, rows, spot = provider.get_weekly_chain(
+            ticker, week_index=week_index, strike_count=settings.strike_count)
     except Exception as exc:  # pragma: no cover - network
         return ScanRow(ticker=ticker, spot=None, c_target=None, edge_pct=None,
-                       direction=None, expiry=None, dte=None, skip=f"fetch error: {exc}")
+                       direction=None, expiry=None, dte=None, week_index=week_index,
+                       skip=f"fetch error: {exc}")
 
     if not rows or not spot:
         return ScanRow(ticker=ticker, spot=spot, c_target=None, edge_pct=None,
-                       direction=None, expiry=expiry, dte=None, skip="no chain / spot")
+                       direction=None, expiry=expiry, dte=None, week_index=week_index,
+                       skip="no chain / spot")
 
     ty, dte = t_years(expiry)
     res = compute(ticker, expiry, rows, spot, ty, dte,
@@ -183,6 +186,7 @@ def evaluate(provider, ticker: str) -> ScanRow:
     c = res.c_target
     base = ScanRow(ticker=ticker, spot=spot, c_target=c,
                    edge_pct=None, direction=None, expiry=expiry, dte=round(dte, 2),
+                   week_index=week_index,
                    max_pain=res.max_pain, call_wall=res.call_wall, put_wall=res.put_wall)
     if c is None or not spot:
         base.skip = "no C target"
@@ -226,10 +230,13 @@ _cache: dict = {"ts": 0.0, "key": None, "payload": None}
 
 
 def run_scan(provider, tickers: Optional[List[str]] = None, use_cache: bool = True,
-             range_filter: Optional[bool] = None) -> dict:
+             range_filter: Optional[bool] = None, weeks: Optional[List[int]] = None) -> dict:
     tickers = [t.upper() for t in (tickers or settings.scan_tickers)]
     rfilter = settings.range_filter if range_filter is None else range_filter
-    key = (tuple(tickers), "live" if settings.live else "mock", rfilter)
+    weeks = sorted(set(weeks if weeks else [0]))
+    # ticker × week combinations to evaluate
+    tasks = [(t, w) for t in tickers for w in weeks]
+    key = (tuple(tickers), tuple(weeks), "live" if settings.live else "mock", rfilter)
     now = time.time()
     if use_cache:
         with _lock:
@@ -242,16 +249,17 @@ def run_scan(provider, tickers: Optional[List[str]] = None, use_cache: bool = Tr
 
     t0 = time.time()
     results: List[ScanRow] = []
-    workers = max(1, min(settings.scan_workers, len(tickers)))
+    workers = max(1, min(settings.scan_workers, len(tasks)))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futs = {pool.submit(evaluate, provider, t): t for t in tickers}
+        futs = {pool.submit(evaluate, provider, t, w): (t, w) for (t, w) in tasks}
         for fut in as_completed(futs):
             try:
                 results.append(fut.result())
             except Exception as exc:  # pragma: no cover - defensive
-                results.append(ScanRow(ticker=futs[fut], spot=None, c_target=None,
+                tk, wk = futs[fut]
+                results.append(ScanRow(ticker=tk, spot=None, c_target=None,
                                        edge_pct=None, direction=None, expiry=None,
-                                       dte=None, skip=f"error: {exc}"))
+                                       dte=None, week_index=wk, skip=f"error: {exc}"))
 
     tradeable = [r for r in results if r.skip is None and r.est_gain_pct is not None]
 
@@ -281,6 +289,8 @@ def run_scan(provider, tickers: Optional[List[str]] = None, use_cache: bool = Tr
     payload = {
         "mode": "live" if settings.live else "mock",
         "scanned": len(tickers),
+        "weeks": weeks,
+        "evaluations": len(tasks),
         "opportunities": len(ranked),
         "range_filter": rfilter,
         "range_days": settings.range_days,
