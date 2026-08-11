@@ -18,9 +18,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.config import settings
-from app.net_dealer import compute
+from app.net_dealer import compute, setup_confidence
 from app.providers.factory import build_provider
-from app.scanner import rank_contracts, run_scan
+from app.scanner import _range_for, classify_range, rank_contracts, run_scan
 from app.timeutil import t_years
 
 logging.basicConfig(level=logging.INFO,
@@ -93,6 +93,25 @@ def net_dealer(ticker: str = Query(..., min_length=1),
         picks = rank_contracts(rows, result.c_target, side, min_gain=0.0, limit=6)
     payload["pick_side"] = side
     payload["picks"] = picks
+
+    # Upgrade the chain-only confidence to the SAME full score the scanner shows:
+    # fold in 30d reachability and the top pick's liquidity, so the Calculator and
+    # Scanner agree for a given ticker/expiry.
+    if result.c_target is not None and spot:
+        stats = _range_for(provider, ticker)
+        range_conf, _m, _x = classify_range(abs(result.c_target - spot), spot, dte, stats)
+        liq_oi = picks[0]["contract_oi"] if picks else None
+        expensive_crush = (result.call_crush_pct if result.expensive_side == "CALL"
+                           else result.put_crush_pct if result.expensive_side == "PUT" else None)
+        score, breakdown = setup_confidence(result.direction_agree, expensive_crush,
+                                            result.pin_steepness, reachability=range_conf,
+                                            liquidity_oi=liq_oi)
+        payload["confidence"] = score
+        payload["confidence_breakdown"] = breakdown
+        payload["range_conf"] = range_conf
+        if stats:
+            payload["adr_percent"] = stats.get("adr_percent")
+            payload["max_range_percent"] = stats.get("max_range_percent")
     return JSONResponse(payload)
 
 

@@ -368,6 +368,7 @@ function renderSignals(d){
     const cls = d.confidence>=70?"mean":(d.confidence>=45?"max":"out");
     parts.push(`Setup <span class="reach ${cls}">${Math.round(d.confidence)}/100</span>`);
   }
+  if(d.range_conf) parts.push(`Reach ${reachBadge(d.range_conf)}`);
   if(d.direction_agree===false)
     parts.push(`<span style="color:var(--amber)" title="crush direction conflicts with C">⚠ mixed direction</span>`);
   el.innerHTML = parts.join(" &nbsp;·&nbsp; ");
