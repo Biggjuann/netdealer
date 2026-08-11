@@ -476,15 +476,13 @@ function drawProfile(d){
     cdot.setAttribute("cx",x(r.strike));cdot.setAttribute("cy",y(r.netdir));cdot.setAttribute("r",2);
     cdot.setAttribute("fill", r.netdir>=0 ? "#f87171":"#34d399");svg.appendChild(cdot);});
   // IV expected-move bands (±1σ amber, ±2σ faint) — the forward-looking range.
-  // Each line is labelled with its price; σ tags are staggered so they don't overlap.
-  const pxLbl = v => v>=100 ? v.toFixed(1) : v.toFixed(2);
-  [["em_low_2","em_high_2","#8a94ab","2σ",padT+9],["em_low","em_high","#fbbf24","1σ",padT+21]].forEach(b=>{
-    // low band label sits to the RIGHT of its line, high band to the LEFT (inward).
+  // Only a small σ tag is drawn; the exact price shows on hover, not statically.
+  [["em_low_2","em_high_2","#8a94ab","2σ"],["em_low","em_high","#fbbf24","1σ"]].forEach(b=>{
     [[d[b[0]],"−"+b[3],"start",4],[d[b[1]],"+"+b[3],"end",-4]].forEach(p=>{
       const px=p[0];
       if(px!=null && px>=minK && px<=maxK){
-        line(x(px),padT+14,x(px),H-padB,b[2],1,"3 3");
-        text(x(px)+p[3], b[4], p[1]+"  "+pxLbl(px), b[2], p[2], 9.5);
+        line(x(px),padT+12,x(px),H-padB,b[2],1,"3 3");
+        text(x(px)+p[3], padT+9, p[1], b[2], p[2], 9.5);
       }
     });
   });
