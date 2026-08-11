@@ -59,7 +59,14 @@
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px 18px;margin-bottom:18px}
   .panel h3{margin:0 0 4px;font-size:13px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}
   .panel .hint{font-size:11.5px;color:var(--dim);margin:0 0 12px}
-  .profile{width:100%;height:230px;display:block}
+  .profile{width:100%;height:230px;display:block;cursor:crosshair}
+  .profilewrap{position:relative}
+  .charttip{position:absolute;pointer-events:none;display:none;z-index:8;
+    background:rgba(10,15,26,.97);border:1px solid var(--line);border-radius:8px;
+    padding:7px 10px;font-size:11.5px;line-height:1.5;white-space:nowrap;
+    box-shadow:0 8px 22px -8px #000}
+  .charttip b{color:var(--txt);font-variant-numeric:tabular-nums}
+  .charttip .k{color:var(--muted)}
   table{width:100%;border-collapse:collapse;font-size:12.5px}
   th,td{padding:5px 8px;text-align:right;white-space:nowrap}
   thead th{position:sticky;top:56px;background:var(--panel);color:var(--muted);font-weight:700;
@@ -189,7 +196,10 @@
     <p class="hint">netDIR(P) = net delta of the open-interest book at price P, normalised by total OI.
       Positive (red) = book net-long upside → dealers net-short → downward pull.
       Negative (green) = dealers net-long → upward pull. <b>"C" is where the curve crosses zero.</b></p>
-    <svg class="profile" id="profile" preserveAspectRatio="none"></svg>
+    <div class="profilewrap">
+      <svg class="profile" id="profile" preserveAspectRatio="none"></svg>
+      <div class="charttip" id="profileTip"></div>
+    </div>
     <div class="legend">
       <span><span class="sw" style="background:var(--pink)"></span>C target (netDIR = 0)</span>
       <span><span class="sw" style="background:var(--blue)"></span>Spot</span>
@@ -278,6 +288,7 @@ const fmtInt = x => (x===null||x===undefined||isNaN(x)) ? "—" : Number(x).toLo
 const pct = x => (x===null||x===undefined||isNaN(x)) ? "—" : (x*100).toFixed(1)+"%";
 
 let LAST = null;
+let PROFILE = null;
 
 async function loadConfig(){
   try{
@@ -465,12 +476,15 @@ function drawProfile(d){
     cdot.setAttribute("cx",x(r.strike));cdot.setAttribute("cy",y(r.netdir));cdot.setAttribute("r",2);
     cdot.setAttribute("fill", r.netdir>=0 ? "#f87171":"#34d399");svg.appendChild(cdot);});
   // IV expected-move bands (±1σ amber, ±2σ faint) — the forward-looking range.
-  [["em_low_2","em_high_2","#56627d","2σ"],["em_low","em_high","#fbbf24","1σ"]].forEach(b=>{
-    [[d[b[0]],"−"+b[3]],[d[b[1]],"+"+b[3]]].forEach(pair=>{
-      const px=pair[0];
+  // Each line is labelled with its price; σ tags are staggered so they don't overlap.
+  const pxLbl = v => v>=100 ? v.toFixed(1) : v.toFixed(2);
+  [["em_low_2","em_high_2","#8a94ab","2σ",padT+9],["em_low","em_high","#fbbf24","1σ",padT+21]].forEach(b=>{
+    // low band label sits to the RIGHT of its line, high band to the LEFT (inward).
+    [[d[b[0]],"−"+b[3],"start",4],[d[b[1]],"+"+b[3],"end",-4]].forEach(p=>{
+      const px=p[0];
       if(px!=null && px>=minK && px<=maxK){
-        line(x(px),padT+12,x(px),H-padB,b[2],1,"2 3");
-        text(x(px),padT+9,pair[1],b[2],"middle",9);
+        line(x(px),padT+14,x(px),H-padB,b[2],1,"3 3");
+        text(x(px)+p[3], b[4], p[1]+"  "+pxLbl(px), b[2], p[2], 9.5);
       }
     });
   });
@@ -487,8 +501,67 @@ function drawProfile(d){
     dot.setAttribute("fill","#ec4899");svg.appendChild(dot);
     text(x(d.c_target),padT+2,"C "+d.c_target.toFixed(2),"#ec4899","middle",11);
   }
-  // x labels
-  [minK,(minK+maxK)/2,maxK].forEach(k=>text(x(k),H-8,k.toFixed(0),"#56627d","middle",10));
+  // x labels (edges only — the center is left for the spot marker label)
+  text(padL,H-8,minK.toFixed(0),"#56627d","start",10);
+  text(W-padR,H-8,maxK.toFixed(0),"#56627d","end",10);
+  // crosshair line (moved on hover)
+  const xh=document.createElementNS(NS,"line");
+  xh.setAttribute("id","xhair"); xh.setAttribute("y1",padT); xh.setAttribute("y2",H-padB);
+  xh.setAttribute("stroke","#e6edf7"); xh.setAttribute("stroke-width",1);
+  xh.setAttribute("stroke-dasharray","2 2"); xh.setAttribute("opacity",0); svg.appendChild(xh);
+  // stash the scale + series so the hover handler can read them
+  PROFILE={minK,maxK,padL,padR,W,H,padT,padB,x,
+    rows:rows.map(r=>({strike:r.strike,netdir:r.netdir})),
+    spot:d.spot,c:d.c_target,
+    em_low:d.em_low,em_high:d.em_high,em_low_2:d.em_low_2,em_high_2:d.em_high_2};
+}
+
+function netdirAt(price){
+  const rs=PROFILE.rows; if(!rs||!rs.length) return null;
+  if(price<=rs[0].strike) return rs[0].netdir;
+  if(price>=rs[rs.length-1].strike) return rs[rs.length-1].netdir;
+  for(let i=1;i<rs.length;i++){
+    if(price<=rs[i].strike){
+      const a=rs[i-1],b=rs[i],t=(price-a.strike)/((b.strike-a.strike)||1);
+      return a.netdir+(b.netdir-a.netdir)*t;
+    }
+  }
+  return null;
+}
+function setupProfileHover(){
+  const svg=$("profile"), tip=$("profileTip");
+  svg.addEventListener("mousemove",e=>{
+    if(!PROFILE) return;
+    const rect=svg.getBoundingClientRect();
+    const {minK,maxK,padL,padR,W,padT,H,padB}=PROFILE;
+    const sx=(e.clientX-rect.left)/rect.width*W;
+    let price=minK+(sx-padL)/((W-padL-padR)||1)*(maxK-minK);
+    price=Math.max(minK,Math.min(maxK,price));
+    const nd=netdirAt(price);
+    const xh=document.getElementById("xhair");
+    if(xh){ const cx=PROFILE.x(price); xh.setAttribute("x1",cx); xh.setAttribute("x2",cx); xh.setAttribute("opacity",.55); }
+    const lvls=[["spot",PROFILE.spot],["C",PROFILE.c],["+1σ",PROFILE.em_high],["−1σ",PROFILE.em_low],
+                ["+2σ",PROFILE.em_high_2],["−2σ",PROFILE.em_low_2]];
+    const tol=(maxK-minK)*0.012; let tag="";
+    for(const [n,v] of lvls){ if(v!=null && Math.abs(price-v)<tol){ tag=n; break; } }
+    const ndCol = nd>=0 ? "var(--red)" : "var(--green)";
+    let html=`<div><span class="k">Price</span> <b>${price.toFixed(2)}</b></div>`
+      +`<div><span class="k">netDIR</span> <b style="color:${ndCol}">${nd!=null?(nd*100).toFixed(1)+"%":"—"}</b></div>`;
+    if(PROFILE.spot!=null){
+      const ds=price-PROFILE.spot;
+      html+=`<div><span class="k">vs spot</span> ${ds>=0?"+":""}${ds.toFixed(2)}`
+        + (PROFILE.c!=null?` &nbsp;<span class="k">vs C</span> ${(price-PROFILE.c>=0?"+":"")}${(price-PROFILE.c).toFixed(2)}`:"")+`</div>`;
+    }
+    if(tag) html+=`<div style="color:var(--amber)">≈ ${tag}</div>`;
+    tip.innerHTML=html; tip.style.display="block";
+    let left=(e.clientX-rect.left)+14, top=(e.clientY-rect.top)+12;
+    if(left+tip.offsetWidth>rect.width) left=(e.clientX-rect.left)-tip.offsetWidth-14;
+    tip.style.left=Math.max(0,left)+"px"; tip.style.top=top+"px";
+  });
+  svg.addEventListener("mouseleave",()=>{
+    tip.style.display="none";
+    const xh=document.getElementById("xhair"); if(xh) xh.setAttribute("opacity",0);
+  });
 }
 
 function drawChain(d){
@@ -651,6 +724,7 @@ $("apiSave").addEventListener("click",()=>{
   $("modal").classList.remove("on"); boot();
 });
 
+setupProfileHover();
 async function boot(){ await loadConfig(); _lastTicker = currentTicker(); await loadExpiries(); }
 boot();
 </script>
