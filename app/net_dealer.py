@@ -147,16 +147,26 @@ class NetDealerResult:
     sweet_spot_low: Optional[float] = None    # crush-zone floor (≈ C)
     sweet_spot_high: Optional[float] = None   # crush-zone ceiling (≈ ShortAvg)
     pin_steepness: Optional[float] = None      # 0..1, how decisive the netDIR crossing is
+    # --- IV expected-move (forward-looking σ bands from ATM implied vol) ---
+    atm_iv: Optional[float] = None             # at-the-money implied vol (decimal)
+    expected_move: Optional[float] = None      # 1σ move in $ to expiry
+    expected_move_pct: Optional[float] = None  # 1σ as a share of spot
+    em_low: Optional[float] = None             # spot − 1σ
+    em_high: Optional[float] = None            # spot + 1σ
+    em_low_2: Optional[float] = None           # spot − 2σ
+    em_high_2: Optional[float] = None          # spot + 2σ
+    c_sigma: Optional[float] = None            # |C − spot| in σ units
+    iv_reach: Optional[str] = None             # within-1sig / within-2sig / beyond-2sig
     confidence: Optional[float] = None         # 0..100 chain-based setup confidence
     confidence_breakdown: Optional[dict] = None
     rows: List[dict] = field(default_factory=list)
     note: str = ""
 
 
-# Confidence weights (sum to 1.0). Reachability + liquidity default to neutral
-# when unknown (e.g. the calculator has no range/liquidity context).
-_CONF_W = {"direction": 0.28, "reachability": 0.27, "fuel": 0.20,
-           "steepness": 0.15, "liquidity": 0.10}
+# Confidence weights (sum to 1.0). range/iv reachability + liquidity default to
+# neutral when unknown (e.g. the calculator's chain-only base score).
+_CONF_W = {"direction": 0.26, "range": 0.16, "iv": 0.13, "fuel": 0.18,
+           "steepness": 0.15, "liquidity": 0.12}
 # A netDIR jump of this size across the strikes bracketing C reads as a fully
 # decisive pin (steepness = 1.0).
 PIN_STEEP_REF = 0.12
@@ -169,16 +179,23 @@ def _reach_component(reachability: Optional[str]) -> float:
             "unknown": 0.5, None: 0.5}.get(reachability, 0.5)
 
 
+def _iv_reach_component(iv_reach: Optional[str]) -> float:
+    return {"within-1sig": 1.0, "within-2sig": 0.55, "beyond-2sig": 0.1,
+            "unknown": 0.5, None: 0.5}.get(iv_reach, 0.5)
+
+
 def setup_confidence(direction_agree: Optional[bool], expensive_crush_pct: Optional[float],
-                     pin_steepness: Optional[float], reachability: Optional[str] = None,
-                     liquidity_oi: Optional[float] = None):
+                     pin_steepness: Optional[float], range_reach: Optional[str] = None,
+                     iv_reach: Optional[str] = None, liquidity_oi: Optional[float] = None):
     """Blend the creator's confirmations into a 0..100 setup score.
 
     * direction  — does the crush (expensive-side) direction agree with C vs spot?
+    * range      — is the move to C within the 30d realized range? (neutral if unknown)
+    * iv         — is C within the IV-implied expected move (±σ)? (neutral if unknown)
     * fuel       — how much of the expensive side's OI is OTM premium to crush.
     * steepness  — how decisive the netDIR zero-crossing is (sharp pin vs drift).
-    * reachability — is the move to C within range (30d / expected)? neutral if unknown.
-    * liquidity  — is the target contract liquid? neutral if unknown.
+    * liquidity  — is the target contract liquid? (neutral if unknown)
+    range + iv are two independent reachability reads; strongest when they agree.
     Returns (score 0..100, breakdown dict of each 0..1 component).
     """
     direction = 1.0 if direction_agree else (0.15 if direction_agree is False else 0.5)
@@ -186,12 +203,30 @@ def setup_confidence(direction_agree: Optional[bool], expensive_crush_pct: Optio
     if expensive_crush_pct is not None:
         fuel = max(0.0, min(1.0, (expensive_crush_pct - 0.40) / 0.50))
     steep = max(0.0, min(1.0, pin_steepness if pin_steepness is not None else 0.0))
-    reach = _reach_component(reachability)
     liq = 0.5 if liquidity_oi is None else max(0.0, min(1.0, liquidity_oi / LIQ_REF))
-    comp = {"direction": direction, "reachability": reach, "fuel": fuel,
+    comp = {"direction": direction, "range": _reach_component(range_reach),
+            "iv": _iv_reach_component(iv_reach), "fuel": fuel,
             "steepness": steep, "liquidity": liq}
     score = 100.0 * sum(_CONF_W[k] * comp[k] for k in _CONF_W)
     return round(score, 1), {k: round(v, 3) for k, v in comp.items()}
+
+
+def atm_iv(rows: List[StrikeRow], spot: float) -> Optional[float]:
+    """Implied vol at the strike closest to spot (mean of call/put IV present)."""
+    best, best_d = None, float("inf")
+    for row in rows:
+        d = abs(row.strike - spot)
+        ivs = [x for x in (row.call_iv, row.put_iv) if x and x > 0]
+        if ivs and d < best_d:
+            best_d, best = d, sum(ivs) / len(ivs)
+    return best
+
+
+def expected_move(spot: Optional[float], iv: Optional[float], t_years: float) -> Optional[float]:
+    """1σ expected move to expiry (dollars): spot × IV × √T."""
+    if not spot or not iv or t_years <= 0:
+        return None
+    return spot * iv * math.sqrt(t_years)
 
 
 def net_delta_at(price: float, rows: List[StrikeRow], t_years: float,
@@ -318,7 +353,7 @@ def compute(ticker: str, expiry: str, rows: List[StrikeRow], spot: Optional[floa
         note = "Chain has no open interest yet (pre-market or brand-new expiry)."
 
     short_avg = _oi_weighted_strike(rows, "put")
-    sig = _crush_signals(rows, spot, c_target, short_avg, per_strike)
+    sig = _crush_signals(rows, spot, c_target, short_avg, per_strike, t_years)
 
     return NetDealerResult(
         ticker=ticker.upper(),
@@ -341,7 +376,8 @@ def compute(ticker: str, expiry: str, rows: List[StrikeRow], spot: Optional[floa
 
 
 def _crush_signals(rows: List[StrikeRow], spot: Optional[float], c_target: Optional[float],
-                   short_avg: Optional[float], per_strike: List[dict]) -> dict:
+                   short_avg: Optional[float], per_strike: List[dict],
+                   t_years: float) -> dict:
     """Compute the crush / zone / pin signals the creator trades off of.
 
     * crush % — share of each side's OI that is OTM (premium that decays on a pin).
@@ -355,9 +391,30 @@ def _crush_signals(rows: List[StrikeRow], spot: Optional[float], c_target: Optio
     out = dict(call_crush_pct=None, put_crush_pct=None, expensive_side=None,
                crush_direction=None, trade_side=None, direction_agree=None,
                sweet_spot_low=None, sweet_spot_high=None, pin_steepness=None,
+               atm_iv=None, expected_move=None, expected_move_pct=None,
+               em_low=None, em_high=None, em_low_2=None, em_high_2=None,
+               c_sigma=None, iv_reach=None,
                confidence=None, confidence_breakdown=None)
     if not spot or not rows:
         return out
+
+    # IV expected-move bands (forward-looking ±σ from ATM implied vol).
+    iv = atm_iv(rows, spot)
+    em1 = expected_move(spot, iv, t_years)
+    if iv:
+        out["atm_iv"] = round(iv, 4)
+    if em1:
+        out["expected_move"] = round(em1, 2)
+        out["expected_move_pct"] = round(em1 / spot, 4)
+        out["em_low"] = round(spot - em1, 2)
+        out["em_high"] = round(spot + em1, 2)
+        out["em_low_2"] = round(spot - 2 * em1, 2)
+        out["em_high_2"] = round(spot + 2 * em1, 2)
+        if c_target is not None:
+            sigma = abs(c_target - spot) / em1
+            out["c_sigma"] = round(sigma, 2)
+            out["iv_reach"] = ("within-1sig" if sigma <= 1.0
+                               else "within-2sig" if sigma <= 2.0 else "beyond-2sig")
 
     call_otm_oi = sum(r.call_oi for r in rows if r.strike > spot)
     call_tot_oi = sum(r.call_oi for r in rows) or 0.0
@@ -386,8 +443,11 @@ def _crush_signals(rows: List[StrikeRow], spot: Optional[float], c_target: Optio
 
     expensive_crush = (out["call_crush_pct"] if out["expensive_side"] == "CALL"
                        else out["put_crush_pct"] if out["expensive_side"] == "PUT" else None)
+    # Chain-only base score: range reachability + liquidity stay neutral (the
+    # scanner/endpoint recompute the full score with those). IV reach IS known
+    # here, so it contributes even to the calculator's base confidence.
     score, breakdown = setup_confidence(out["direction_agree"], expensive_crush,
-                                        out["pin_steepness"])
+                                        out["pin_steepness"], iv_reach=out["iv_reach"])
     out["confidence"] = score
     out["confidence_breakdown"] = breakdown
     return out

@@ -195,6 +195,7 @@
       <span><span class="sw" style="background:var(--blue)"></span>Spot</span>
       <span><span class="sw" style="background:var(--red)"></span>netDIR &gt; 0 (dealer-short)</span>
       <span><span class="sw" style="background:var(--green)"></span>netDIR &lt; 0 (dealer-long)</span>
+      <span><span class="sw" style="background:var(--amber)"></span>±1σ / ±2σ IV expected move</span>
     </div>
   </div>
 
@@ -240,7 +241,7 @@
         <thead><tr>
           <th class="l">#</th><th class="l">Ticker</th><th>Spot</th><th>C target</th><th>Edge %</th>
           <th>Trade</th><th>Strike</th><th>Exp</th><th>Premium</th><th>Est. gain</th><th>Setup</th><th>Breakeven</th><th>OI</th>
-          <th>30d ADR / Max</th><th>Reach</th>
+          <th>30d ADR / Max</th><th>Reach</th><th>IV σ</th>
         </tr></thead>
         <tbody id="scanBody"></tbody>
       </table>
@@ -369,6 +370,11 @@ function renderSignals(d){
     parts.push(`Setup <span class="reach ${cls}">${Math.round(d.confidence)}/100</span>`);
   }
   if(d.range_conf) parts.push(`Reach ${reachBadge(d.range_conf)}`);
+  if(d.expected_move!=null){
+    const ivcls = d.iv_reach==="within-1sig"?"mean":(d.iv_reach==="within-2sig"?"max":"out");
+    parts.push(`Exp move <b>±$${fmt(d.expected_move)}</b> (${(d.expected_move_pct*100).toFixed(1)}%, 1σ)`
+      + ` · C <span class="reach ${ivcls}" title="move to C in IV expected-move σ">${d.c_sigma}σ</span>`);
+  }
   if(d.direction_agree===false)
     parts.push(`<span style="color:var(--amber)" title="crush direction conflicts with C">⚠ mixed direction</span>`);
   el.innerHTML = parts.join(" &nbsp;·&nbsp; ");
@@ -458,6 +464,16 @@ function drawProfile(d){
   rows.forEach(r=>{const cdot=document.createElementNS(NS,"circle");
     cdot.setAttribute("cx",x(r.strike));cdot.setAttribute("cy",y(r.netdir));cdot.setAttribute("r",2);
     cdot.setAttribute("fill", r.netdir>=0 ? "#f87171":"#34d399");svg.appendChild(cdot);});
+  // IV expected-move bands (±1σ amber, ±2σ faint) — the forward-looking range.
+  [["em_low_2","em_high_2","#56627d","2σ"],["em_low","em_high","#fbbf24","1σ"]].forEach(b=>{
+    [[d[b[0]],"−"+b[3]],[d[b[1]],"+"+b[3]]].forEach(pair=>{
+      const px=pair[0];
+      if(px!=null && px>=minK && px<=maxK){
+        line(x(px),padT+12,x(px),H-padB,b[2],1,"2 3");
+        text(x(px),padT+9,pair[1],b[2],"middle",9);
+      }
+    });
+  });
   // spot marker
   if(d.spot!==null && d.spot>=minK && d.spot<=maxK){
     line(x(d.spot),padT,x(d.spot),H-padB,"#38bdf8",1.5,"3 3");
@@ -541,7 +557,13 @@ function reachBadge(conf){
 function confBadge(v){
   if(v==null) return `<span class="reach na">—</span>`;
   const cls = v>=70?"mean":(v>=45?"max":"out");
-  return `<span class="reach ${cls}" title="setup confidence 0-100 (direction agreement, crush fuel, pin steepness, reachability, liquidity)">${Math.round(v)}</span>`;
+  return `<span class="reach ${cls}" title="setup confidence 0-100 (direction agreement, crush fuel, pin steepness, 30d + IV reachability, liquidity)">${Math.round(v)}</span>`;
+}
+function ivBadge(r){
+  if(r.c_sigma==null) return `<span class="reach na">—</span>`;
+  const cls = r.iv_reach==="within-1sig"?"mean":(r.iv_reach==="within-2sig"?"max":"out");
+  const em = r.expected_move_pct!=null ? ` — 1σ move ${(r.expected_move_pct*100).toFixed(1)}%` : "";
+  return `<span class="reach ${cls}" title="move to C is ${r.c_sigma}σ of the IV expected move${em}">${r.c_sigma}σ</span>`;
 }
 function renderScan(d){
   const cacheTxt = d.cached ? ` · cached ${d.age_seconds}s ago` : ` · ${d.elapsed_seconds}s`;
@@ -584,7 +606,8 @@ function renderScan(d){
       `<td>${fmt(r.breakeven)}</td>`+
       `<td style="color:var(--dim)">${fmtInt(r.contract_oi)}</td>`+
       `<td style="color:var(--muted)">${adr} / ${mx}</td>`+
-      `<td>${reachBadge(r.range_conf)}</td>`;
+      `<td>${reachBadge(r.range_conf)}</td>`+
+      `<td>${ivBadge(r)}</td>`;
     tr.addEventListener("click",()=>openInCalc(r));
     body.appendChild(tr);
   });

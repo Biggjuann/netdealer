@@ -104,8 +104,8 @@ def net_dealer(ticker: str = Query(..., min_length=1),
         expensive_crush = (result.call_crush_pct if result.expensive_side == "CALL"
                            else result.put_crush_pct if result.expensive_side == "PUT" else None)
         score, breakdown = setup_confidence(result.direction_agree, expensive_crush,
-                                            result.pin_steepness, reachability=range_conf,
-                                            liquidity_oi=liq_oi)
+                                            result.pin_steepness, range_reach=range_conf,
+                                            iv_reach=result.iv_reach, liquidity_oi=liq_oi)
         payload["confidence"] = score
         payload["confidence_breakdown"] = breakdown
         payload["range_conf"] = range_conf

@@ -126,8 +126,23 @@ fragile moonshot. The score blends:
 | **Direction agreement** | Does the dealer **crush** direction (crush the *expensive* side — the one with the most OTM premium at stake) agree with C vs spot? The `Trade` cell shows ✓ when it confirms, ⚠ when it conflicts. |
 | **Crush fuel** | How much of the expensive side's OI is OTM premium to be crushed (the pin's fuel). |
 | **Pin steepness** | How sharply netDIR flips across C — a decisive pin vs a lazy drift. |
-| **Reachability** | The 30d range verdict below (MEAN > MAX > OUT). |
+| **30d reachability** | The realized-range verdict below (MEAN > MAX > OUT). |
+| **IV reachability** | Is C within the IV **expected move**? (`C σ`: ≤1σ > ≤2σ > beyond). |
 | **Liquidity** | Open interest of the picked contract. |
+
+The two reachability reads are independent — one backward-looking (30d realized
+range), one forward-looking (option-implied). **Confidence is highest when both
+agree** the move to C is reachable.
+
+### IV expected-move bands
+
+From the ATM implied vol and time to expiry, the tool computes the **1σ expected
+move** (`spot × IV × √T`) and the ±1σ / ±2σ bands — the market's own forward-looking
+range (the creator's right-hand band ladder). Each setup reports **`C σ`**: how
+many expected-move σ the move to C requires (≤1σ = very reachable, ≤2σ = reachable
+on a bigger move, beyond = a stretch). The Calculator shows the expected move and
+draws the ±1σ/±2σ bands right on the netDIR profile chart; the scanner shows the
+`IV σ` per row.
 
 The **Sweet-spot zone** (the crush zone between C and the ShortAvg centroid) is
 shown for each setup — the band price tends to get pinned in, not just the single
@@ -274,8 +289,10 @@ GET /api/expiries?ticker=MU            -> { "expiries": ["2026-08-07", ...] }
 GET /api/net-dealer?ticker=MU&expiry=2026-08-07
     -> { c_target, c_netdir, max_pain, call_wall, put_wall,
          long_avg, short_avg, spot, dte, rows: [{strike, call_oi, put_oi,
-         netdir, ...}], pick_side, picks: [{side, strike, premium,
-         est_gain_pct, breakeven, intrinsic_at_c, contract_oi, ...}], ... }
+         netdir, ...}], pick_side, picks: [...], expensive_side, crush_direction,
+         direction_agree, sweet_spot_low, sweet_spot_high, confidence,
+         atm_iv, expected_move, expected_move_pct, em_low, em_high, c_sigma,
+         iv_reach, range_conf, ... }
 GET /api/scan[?weeks=this|next|both][&refresh=true][&range_filter=false]
     -> { scanned, weeks, evaluations, opportunities, range_filter, range_filtered_out, results:
          [{ticker, spot, c_target, edge_pct, direction, strike, premium,

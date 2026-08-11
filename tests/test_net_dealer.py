@@ -154,16 +154,41 @@ def test_crush_signals_and_zone():
 
 
 def test_setup_confidence_monotonic():
-    # Agreement, more fuel, sharper pin, and better reachability all raise the score.
-    base = setup_confidence(True, 0.8, 0.8, "within-mean", 5000)[0]
-    assert base > setup_confidence(False, 0.8, 0.8, "within-mean", 5000)[0], "disagreement hurts"
-    assert base > setup_confidence(True, 0.4, 0.8, "within-mean", 5000)[0], "less fuel hurts"
-    assert base > setup_confidence(True, 0.8, 0.2, "within-mean", 5000)[0], "flatter pin hurts"
-    assert base > setup_confidence(True, 0.8, 0.8, "out-of-range", 5000)[0], "unreachable hurts"
-    # neutral fills stay in-range
-    s, comp = setup_confidence(None, None, None, None, None)
-    assert 0 <= s <= 100 and set(comp) == {"direction", "reachability", "fuel", "steepness", "liquidity"}
-    print(f"ok  confidence monotonic; strong setup = {base}")
+    # Agreement, more fuel, sharper pin, better range & IV reachability all raise it.
+    base = setup_confidence(True, 0.8, 0.8, range_reach="within-mean",
+                            iv_reach="within-1sig", liquidity_oi=5000)[0]
+    assert base > setup_confidence(False, 0.8, 0.8, range_reach="within-mean",
+                                   iv_reach="within-1sig", liquidity_oi=5000)[0], "disagreement hurts"
+    assert base > setup_confidence(True, 0.4, 0.8, range_reach="within-mean",
+                                   iv_reach="within-1sig", liquidity_oi=5000)[0], "less fuel hurts"
+    assert base > setup_confidence(True, 0.8, 0.8, range_reach="out-of-range",
+                                   iv_reach="within-1sig", liquidity_oi=5000)[0], "out of 30d range hurts"
+    assert base > setup_confidence(True, 0.8, 0.8, range_reach="within-mean",
+                                   iv_reach="beyond-2sig", liquidity_oi=5000)[0], "beyond IV move hurts"
+    s, comp = setup_confidence(None, None, None)
+    assert 0 <= s <= 100
+    assert set(comp) == {"direction", "range", "iv", "fuel", "steepness", "liquidity"}
+    print(f"ok  confidence monotonic (range+iv); strong setup = {base}")
+
+
+def test_expected_move_bands():
+    from app.net_dealer import atm_iv, expected_move
+    rows = [StrikeRow(strike=float(k), call_oi=1000, put_oi=1000,
+                      call_iv=0.30, put_iv=0.30) for k in range(90, 111, 5)]
+    iv = atm_iv(rows, 100.0)
+    assert approx(iv, 0.30, 0.01)
+    # 30 days out: EM = 100 * 0.30 * sqrt(30/365) ≈ 8.6
+    em = expected_move(100.0, iv, 30 / 365.0)
+    assert 8.0 < em < 9.2, em
+    res = compute("T", "2099-01-15", rows, spot=100.0, t_years=30 / 365.0, dte=30.0)
+    assert res.expected_move is not None
+    assert res.em_low < 100.0 < res.em_high
+    assert res.em_low_2 < res.em_low and res.em_high_2 > res.em_high
+    if res.c_target is not None:
+        assert res.c_sigma is not None
+        assert res.iv_reach in ("within-1sig", "within-2sig", "beyond-2sig")
+    print(f"ok  IV bands: EM=±{res.expected_move} ({res.expected_move_pct*100:.1f}%) "
+          f"1σ=[{res.em_low},{res.em_high}] Cσ={res.c_sigma} reach={res.iv_reach}")
 
 
 def test_empty_chain_is_safe():

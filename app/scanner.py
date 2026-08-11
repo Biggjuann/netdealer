@@ -71,6 +71,9 @@ class ScanRow:
     sweet_spot_low: Optional[float] = None
     sweet_spot_high: Optional[float] = None
     pin_steepness: Optional[float] = None
+    expected_move_pct: Optional[float] = None    # 1σ IV expected move as % of spot
+    c_sigma: Optional[float] = None              # |C - spot| in σ units
+    iv_reach: Optional[str] = None               # within-1sig / within-2sig / beyond-2sig
     confidence: Optional[float] = None          # 0..100 full setup confidence
     confidence_breakdown: Optional[dict] = None
     opportunity_score: Optional[float] = None   # est_gain × confidence (ranking key)
@@ -240,11 +243,14 @@ def evaluate(provider, ticker: str, week_index: int = 0) -> ScanRow:
     base.sweet_spot_low = res.sweet_spot_low
     base.sweet_spot_high = res.sweet_spot_high
     base.pin_steepness = res.pin_steepness
+    base.expected_move_pct = res.expected_move_pct
+    base.c_sigma = res.c_sigma
+    base.iv_reach = res.iv_reach
     expensive_crush = (res.call_crush_pct if res.expensive_side == "CALL"
                        else res.put_crush_pct if res.expensive_side == "PUT" else None)
     score, breakdown = setup_confidence(res.direction_agree, expensive_crush,
-                                        res.pin_steepness, reachability=range_conf,
-                                        liquidity_oi=base.contract_oi)
+                                        res.pin_steepness, range_reach=range_conf,
+                                        iv_reach=res.iv_reach, liquidity_oi=base.contract_oi)
     base.confidence = score
     base.confidence_breakdown = breakdown
     base.opportunity_score = round(base.est_gain_pct * score / 100.0, 4)
