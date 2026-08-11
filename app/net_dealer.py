@@ -137,8 +137,61 @@ class NetDealerResult:
     short_avg: Optional[float]      # put-OI-weighted strike
     total_call_oi: float
     total_put_oi: float
+    # --- crush / zone / pin signals (the creator's "how it trades" logic) ---
+    call_crush_pct: Optional[float] = None   # share of call OI that is OTM
+    put_crush_pct: Optional[float] = None     # share of put OI that is OTM
+    expensive_side: Optional[str] = None      # CALL / PUT — where the OTM premium sits
+    crush_direction: Optional[str] = None     # DOWN / UP — where dealers push price
+    trade_side: Optional[str] = None          # CALL / PUT to buy toward C
+    direction_agree: Optional[bool] = None    # crush direction agrees with C vs spot
+    sweet_spot_low: Optional[float] = None    # crush-zone floor (≈ C)
+    sweet_spot_high: Optional[float] = None   # crush-zone ceiling (≈ ShortAvg)
+    pin_steepness: Optional[float] = None      # 0..1, how decisive the netDIR crossing is
+    confidence: Optional[float] = None         # 0..100 chain-based setup confidence
+    confidence_breakdown: Optional[dict] = None
     rows: List[dict] = field(default_factory=list)
     note: str = ""
+
+
+# Confidence weights (sum to 1.0). Reachability + liquidity default to neutral
+# when unknown (e.g. the calculator has no range/liquidity context).
+_CONF_W = {"direction": 0.28, "reachability": 0.27, "fuel": 0.20,
+           "steepness": 0.15, "liquidity": 0.10}
+# A netDIR jump of this size across the strikes bracketing C reads as a fully
+# decisive pin (steepness = 1.0).
+PIN_STEEP_REF = 0.12
+# Contract OI at/above this reads as full liquidity for the score.
+LIQ_REF = 2000.0
+
+
+def _reach_component(reachability: Optional[str]) -> float:
+    return {"within-mean": 1.0, "within-max": 0.6, "out-of-range": 0.1,
+            "unknown": 0.5, None: 0.5}.get(reachability, 0.5)
+
+
+def setup_confidence(direction_agree: Optional[bool], expensive_crush_pct: Optional[float],
+                     pin_steepness: Optional[float], reachability: Optional[str] = None,
+                     liquidity_oi: Optional[float] = None):
+    """Blend the creator's confirmations into a 0..100 setup score.
+
+    * direction  — does the crush (expensive-side) direction agree with C vs spot?
+    * fuel       — how much of the expensive side's OI is OTM premium to crush.
+    * steepness  — how decisive the netDIR zero-crossing is (sharp pin vs drift).
+    * reachability — is the move to C within range (30d / expected)? neutral if unknown.
+    * liquidity  — is the target contract liquid? neutral if unknown.
+    Returns (score 0..100, breakdown dict of each 0..1 component).
+    """
+    direction = 1.0 if direction_agree else (0.15 if direction_agree is False else 0.5)
+    fuel = 0.0
+    if expensive_crush_pct is not None:
+        fuel = max(0.0, min(1.0, (expensive_crush_pct - 0.40) / 0.50))
+    steep = max(0.0, min(1.0, pin_steepness if pin_steepness is not None else 0.0))
+    reach = _reach_component(reachability)
+    liq = 0.5 if liquidity_oi is None else max(0.0, min(1.0, liquidity_oi / LIQ_REF))
+    comp = {"direction": direction, "reachability": reach, "fuel": fuel,
+            "steepness": steep, "liquidity": liq}
+    score = 100.0 * sum(_CONF_W[k] * comp[k] for k in _CONF_W)
+    return round(score, 1), {k: round(v, 3) for k, v in comp.items()}
 
 
 def net_delta_at(price: float, rows: List[StrikeRow], t_years: float,
@@ -264,6 +317,9 @@ def compute(ticker: str, expiry: str, rows: List[StrikeRow], spot: Optional[floa
     elif total_call_oi + total_put_oi == 0:
         note = "Chain has no open interest yet (pre-market or brand-new expiry)."
 
+    short_avg = _oi_weighted_strike(rows, "put")
+    sig = _crush_signals(rows, spot, c_target, short_avg, per_strike)
+
     return NetDealerResult(
         ticker=ticker.upper(),
         expiry=expiry,
@@ -275,9 +331,77 @@ def compute(ticker: str, expiry: str, rows: List[StrikeRow], spot: Optional[floa
         call_wall=_peak_oi_strike(rows, "call"),
         put_wall=_peak_oi_strike(rows, "put"),
         long_avg=_oi_weighted_strike(rows, "call"),
-        short_avg=_oi_weighted_strike(rows, "put"),
+        short_avg=short_avg,
         total_call_oi=total_call_oi,
         total_put_oi=total_put_oi,
         rows=per_strike,
         note=note,
+        **sig,
     )
+
+
+def _crush_signals(rows: List[StrikeRow], spot: Optional[float], c_target: Optional[float],
+                   short_avg: Optional[float], per_strike: List[dict]) -> dict:
+    """Compute the crush / zone / pin signals the creator trades off of.
+
+    * crush % — share of each side's OI that is OTM (premium that decays on a pin).
+    * expensive side — where the OTM premium notional (OI × ask) is largest; dealers
+      crush that side, pushing price the other way.
+    * sweet-spot zone — the band between C and ShortAvg where dealer liability is
+      lowest (price gets pinned here).
+    * pin steepness — how sharply netDIR flips across the strikes bracketing C.
+    * confidence — chain-based blend (reachability/liquidity left neutral here).
+    """
+    out = dict(call_crush_pct=None, put_crush_pct=None, expensive_side=None,
+               crush_direction=None, trade_side=None, direction_agree=None,
+               sweet_spot_low=None, sweet_spot_high=None, pin_steepness=None,
+               confidence=None, confidence_breakdown=None)
+    if not spot or not rows:
+        return out
+
+    call_otm_oi = sum(r.call_oi for r in rows if r.strike > spot)
+    call_tot_oi = sum(r.call_oi for r in rows) or 0.0
+    put_otm_oi = sum(r.put_oi for r in rows if r.strike < spot)
+    put_tot_oi = sum(r.put_oi for r in rows) or 0.0
+    out["call_crush_pct"] = round(call_otm_oi / call_tot_oi, 4) if call_tot_oi else None
+    out["put_crush_pct"] = round(put_otm_oi / put_tot_oi, 4) if put_tot_oi else None
+
+    call_otm_prem = sum(r.call_oi * r.call_ask for r in rows if r.strike > spot)
+    put_otm_prem = sum(r.put_oi * r.put_ask for r in rows if r.strike < spot)
+    if call_otm_prem or put_otm_prem:
+        out["expensive_side"] = "CALL" if call_otm_prem >= put_otm_prem else "PUT"
+        out["crush_direction"] = "DOWN" if out["expensive_side"] == "CALL" else "UP"
+
+    if c_target is not None:
+        out["trade_side"] = "CALL" if c_target > spot else "PUT"
+        # crush of the expensive side implies buying the opposite side
+        crush_trade = ("PUT" if out["expensive_side"] == "CALL"
+                       else "CALL" if out["expensive_side"] == "PUT" else None)
+        if crush_trade is not None:
+            out["direction_agree"] = (out["trade_side"] == crush_trade)
+        if short_avg is not None:
+            out["sweet_spot_low"] = round(min(c_target, short_avg), 2)
+            out["sweet_spot_high"] = round(max(c_target, short_avg), 2)
+        out["pin_steepness"] = _pin_steepness(per_strike, c_target)
+
+    expensive_crush = (out["call_crush_pct"] if out["expensive_side"] == "CALL"
+                       else out["put_crush_pct"] if out["expensive_side"] == "PUT" else None)
+    score, breakdown = setup_confidence(out["direction_agree"], expensive_crush,
+                                        out["pin_steepness"])
+    out["confidence"] = score
+    out["confidence_breakdown"] = breakdown
+    return out
+
+
+def _pin_steepness(per_strike: List[dict], c_target: float) -> Optional[float]:
+    """netDIR jump across the two strikes bracketing C, normalised to 0..1."""
+    below = above = None
+    for row in per_strike:
+        if row["strike"] <= c_target:
+            below = row
+        elif above is None:
+            above = row
+    if not below or not above:
+        return None
+    jump = abs(above["netdir"] - below["netdir"])
+    return round(max(0.0, min(1.0, jump / PIN_STEEP_REF)), 3)

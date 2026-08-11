@@ -114,6 +114,27 @@ skipped. Click any row to open that ticker in the Calculator. The scan runs with
 a small thread pool and a short result cache (`SCAN_*` knobs in
 [`.env.example`](.env.example)).
 
+### Setup confidence — "will this trade work out?"
+
+Ranking by raw %-gain alone surfaces big-but-shaky trades. The scanner instead
+ranks by **reward × Setup confidence** (0–100), encoding how the method's creator
+judges a setup — so a slightly smaller gain with a much stronger setup outranks a
+fragile moonshot. The score blends:
+
+| Signal | What it captures |
+|---|---|
+| **Direction agreement** | Does the dealer **crush** direction (crush the *expensive* side — the one with the most OTM premium at stake) agree with C vs spot? The `Trade` cell shows ✓ when it confirms, ⚠ when it conflicts. |
+| **Crush fuel** | How much of the expensive side's OI is OTM premium to be crushed (the pin's fuel). |
+| **Pin steepness** | How sharply netDIR flips across C — a decisive pin vs a lazy drift. |
+| **Reachability** | The 30d range verdict below (MEAN > MAX > OUT). |
+| **Liquidity** | Open interest of the picked contract. |
+
+The **Sweet-spot zone** (the crush zone between C and the ShortAvg centroid) is
+shown for each setup — the band price tends to get pinned in, not just the single
+C point. Both the scanner (`Setup` column) and the Calculator (under the C hero)
+surface the crush direction, zone, and confidence. This directly captures the
+creator's read: *crush the expensive side, target the zone, close above C.*
+
 ### Range achievability filter (Biggjuann/Range)
 
 The scanner further filters to trades that are **actually reachable**: it checks

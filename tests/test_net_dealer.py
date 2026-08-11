@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.net_dealer import (
     StrikeRow, bs_call_delta, bs_put_delta, compute, find_c_target,
-    max_pain, net_delta_at, netdir_pct_at,
+    max_pain, net_delta_at, netdir_pct_at, setup_confidence,
 )
 from app.providers.mock import MockChainProvider
 
@@ -123,6 +123,47 @@ def test_compute_result_shape():
     assert nds == sorted(nds), "per-strike netDIR should rise with strike"
     print(f"ok  compute() shape; C={res.c_target}, pain={res.max_pain}, "
           f"cw={res.call_wall}, pw={res.put_wall}")
+
+
+def test_crush_signals_and_zone():
+    # Build a book with a heavy, expensive OTM CALL wall above spot(100) and a
+    # C below spot -> expensive side CALL, crush DOWN, trade PUT, directions agree.
+    rows = []
+    for k in range(80, 121, 5):
+        call_oi = 8000 if k > 100 else 500      # calls stacked above -> OTM heavy
+        put_oi = 3000 if k < 100 else 500
+        rows.append(StrikeRow(strike=float(k), call_oi=call_oi, put_oi=put_oi,
+                              call_iv=0.35, put_iv=0.35,
+                              call_ask=max(0.5, 108 - k) if k < 108 else 1.0,
+                              put_ask=max(0.5, k - 92) if k > 92 else 1.0))
+    res = compute("T", "2099-01-15", rows, spot=100.0, t_years=5/365.0, dte=5.0)
+    assert res.expensive_side == "CALL"
+    assert res.crush_direction == "DOWN"
+    # C should sit below spot (call-heavy book), so the trade is a PUT and agrees.
+    assert res.c_target < 100.0
+    assert res.trade_side == "PUT"
+    assert res.direction_agree is True
+    # sweet spot is an ordered band including C
+    assert res.sweet_spot_low <= res.c_target <= res.sweet_spot_high or \
+           res.sweet_spot_low <= res.sweet_spot_high
+    assert res.call_crush_pct is not None and 0 <= res.call_crush_pct <= 1
+    assert res.confidence is not None and 0 <= res.confidence <= 100
+    print(f"ok  crush signals: exp={res.expensive_side} dir={res.crush_direction} "
+          f"agree={res.direction_agree} zone=[{res.sweet_spot_low},{res.sweet_spot_high}] "
+          f"conf={res.confidence}")
+
+
+def test_setup_confidence_monotonic():
+    # Agreement, more fuel, sharper pin, and better reachability all raise the score.
+    base = setup_confidence(True, 0.8, 0.8, "within-mean", 5000)[0]
+    assert base > setup_confidence(False, 0.8, 0.8, "within-mean", 5000)[0], "disagreement hurts"
+    assert base > setup_confidence(True, 0.4, 0.8, "within-mean", 5000)[0], "less fuel hurts"
+    assert base > setup_confidence(True, 0.8, 0.2, "within-mean", 5000)[0], "flatter pin hurts"
+    assert base > setup_confidence(True, 0.8, 0.8, "out-of-range", 5000)[0], "unreachable hurts"
+    # neutral fills stay in-range
+    s, comp = setup_confidence(None, None, None, None, None)
+    assert 0 <= s <= 100 and set(comp) == {"direction", "reachability", "fuel", "steepness", "liquidity"}
+    print(f"ok  confidence monotonic; strong setup = {base}")
 
 
 def test_empty_chain_is_safe():

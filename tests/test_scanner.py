@@ -74,20 +74,18 @@ def test_evaluate_direction_matches_edge():
     print(f"ok  evaluate PFE: C={r.c_target} spot={r.spot} side={r.direction} skip={r.skip}")
 
 
-def test_run_scan_ranks_by_gain_desc():
+def test_run_scan_actionable_rows():
     prov = MockChainProvider()
     d = run_scan(prov, tickers=["NVDA", "AAPL", "TSLA", "PFE", "LLY", "MSFT", "JPM", "GS"],
                  use_cache=False)
     assert d["scanned"] == 8
-    gains = [r["est_gain_pct"] for r in d["results"]]
-    assert gains == sorted(gains, reverse=True), "results must be ranked by est_gain desc"
-    # every ranked row is a real, actionable opportunity
+    # every ranked row is a real, actionable opportunity (ordering is checked by
+    # test_scan_ranks_by_opportunity_score)
     for r in d["results"]:
         assert r["direction"] in ("CALL", "PUT")
         assert r["strike"] is not None and r["premium"] is not None
         assert r["est_gain_pct"] >= settings.scan_min_gain_pct
-    print(f"ok  run_scan: {d['opportunities']}/{d['scanned']} opportunities, "
-          f"top gain {gains[0]*100:.0f}%" if gains else "ok  run_scan (no opps)")
+    print(f"ok  run_scan: {d['opportunities']}/{d['scanned']} actionable opportunities")
 
 
 def test_run_scan_multiweek():
@@ -107,6 +105,22 @@ def test_run_scan_multiweek():
         if 0 in wk and 1 in wk:
             assert wk[1] > wk[0], f"{t}: next-week expiry {wk[1]} must be after {wk[0]}"
     print(f"ok  multiweek: {both['evaluations']} evaluations across weeks {both['weeks']}")
+
+
+def test_scan_ranks_by_opportunity_score():
+    prov = MockChainProvider()
+    d = run_scan(prov, tickers=["NVDA", "AAPL", "TSLA", "PFE", "LLY", "JPM", "GS", "COIN"],
+                 use_cache=False)
+    scores = [r["opportunity_score"] for r in d["results"]]
+    assert scores == sorted(scores, reverse=True), "ranked by reward × confidence"
+    for r in d["results"]:
+        assert 0 <= r["confidence"] <= 100
+        assert r["opportunity_score"] is not None
+        # opportunity_score == est_gain × confidence/100 (within rounding)
+        assert abs(r["opportunity_score"] - r["est_gain_pct"] * r["confidence"] / 100) < 0.01
+        assert r["expensive_side"] in ("CALL", "PUT", None)
+        assert r["sweet_spot_low"] is not None and r["sweet_spot_high"] is not None
+    print(f"ok  scan ranked by opportunity_score; top conf={d['results'][0]['confidence']}")
 
 
 def test_run_scan_cache():

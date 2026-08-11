@@ -32,7 +32,7 @@ from dataclasses import asdict, dataclass, field
 from typing import List, Optional
 
 from app.config import settings
-from app.net_dealer import compute
+from app.net_dealer import compute, setup_confidence
 from app.range_stats import compute_range
 from app.timeutil import t_years
 
@@ -64,6 +64,16 @@ class ScanRow:
     max_range_percent: Optional[float] = None   # 30d widest single-day range %
     range_conf: Optional[str] = None            # within-mean / within-max / out-of-range / unknown
     range_days: Optional[int] = None
+    # --- crush / zone / confidence (the creator's "will it work" signals) ---
+    expensive_side: Optional[str] = None        # CALL / PUT — richer OTM premium
+    crush_direction: Optional[str] = None       # DOWN / UP — where dealers push
+    direction_agree: Optional[bool] = None      # crush dir agrees with C vs spot
+    sweet_spot_low: Optional[float] = None
+    sweet_spot_high: Optional[float] = None
+    pin_steepness: Optional[float] = None
+    confidence: Optional[float] = None          # 0..100 full setup confidence
+    confidence_breakdown: Optional[dict] = None
+    opportunity_score: Optional[float] = None   # est_gain × confidence (ranking key)
     skip: Optional[str] = None       # reason it is not a ranked opportunity
 
 
@@ -219,8 +229,25 @@ def evaluate(provider, ticker: str, week_index: int = 0) -> ScanRow:
     if stats:
         base.adr_percent = stats.get("adr_percent")
         base.max_range_percent = stats.get("max_range_percent")
-    conf, _mean_reach, _max_reach = classify_range(abs(c - spot), spot, dte, stats)
-    base.range_conf = conf
+    range_conf, _mean_reach, _max_reach = classify_range(abs(c - spot), spot, dte, stats)
+    base.range_conf = range_conf
+
+    # Crush / zone / pin signals from the engine, + full confidence score that
+    # folds in range reachability and the picked contract's liquidity.
+    base.expensive_side = res.expensive_side
+    base.crush_direction = res.crush_direction
+    base.direction_agree = res.direction_agree
+    base.sweet_spot_low = res.sweet_spot_low
+    base.sweet_spot_high = res.sweet_spot_high
+    base.pin_steepness = res.pin_steepness
+    expensive_crush = (res.call_crush_pct if res.expensive_side == "CALL"
+                       else res.put_crush_pct if res.expensive_side == "PUT" else None)
+    score, breakdown = setup_confidence(res.direction_agree, expensive_crush,
+                                        res.pin_steepness, reachability=range_conf,
+                                        liquidity_oi=base.contract_oi)
+    base.confidence = score
+    base.confidence_breakdown = breakdown
+    base.opportunity_score = round(base.est_gain_pct * score / 100.0, 4)
     return base
 
 
@@ -283,7 +310,11 @@ def run_scan(provider, tickers: Optional[List[str]] = None, use_cache: bool = Tr
     else:
         ranked = tradeable
 
-    ranked.sort(key=lambda r: r.est_gain_pct, reverse=True)
+    # Rank by reward × confidence, so a slightly-smaller gain with a much
+    # stronger setup (direction agrees, high crush fuel, sharp pin, reachable)
+    # outranks a big-gain-but-shaky one. Falls back to raw gain if unscored.
+    ranked.sort(key=lambda r: (r.opportunity_score if r.opportunity_score is not None
+                               else r.est_gain_pct), reverse=True)
     skipped = [r for r in results if r.skip is not None]
 
     payload = {

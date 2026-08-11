@@ -158,6 +158,7 @@
       <div class="lab">🎯 Net Dealer Target "C"</div>
       <div class="price mono" id="cPrice">—</div>
       <div class="sub" id="cSub">Select a ticker &amp; expiry, then Calculate.</div>
+      <div class="sub" id="cSignals" style="margin-top:9px;font-size:12px"></div>
     </div>
     <div class="stats">
       <div class="stat"><div class="k">Spot</div><div class="v mono" id="sSpot">—</div><div class="d" id="sSpotD"></div></div>
@@ -238,16 +239,17 @@
       <table class="scan">
         <thead><tr>
           <th class="l">#</th><th class="l">Ticker</th><th>Spot</th><th>C target</th><th>Edge %</th>
-          <th>Trade</th><th>Strike</th><th>Exp</th><th>Premium</th><th>Est. gain</th><th>Breakeven</th><th>OI</th>
+          <th>Trade</th><th>Strike</th><th>Exp</th><th>Premium</th><th>Est. gain</th><th>Setup</th><th>Breakeven</th><th>OI</th>
           <th>30d ADR / Max</th><th>Reach</th>
         </tr></thead>
         <tbody id="scanBody"></tbody>
       </table>
     </div>
     <div class="skips" id="scanSkips"></div>
-    <p class="hint" style="margin-top:14px">Est. gain assumes the underlying pins to C by expiry and the contract is worth
-      full intrinsic value there — an idealized projection, not a guarantee. Click any row to open it in the Calculator.
-      <b>Not financial advice.</b></p>
+    <p class="hint" style="margin-top:14px">Ranked by <b>reward × Setup confidence</b> (0–100): direction agreement (does the
+      dealer <b>crush</b> direction match C?), crush fuel (OTM premium at stake), how sharp the netDIR pin is, 30d reachability, and
+      liquidity. <b>Trade</b> shows a ✓ when the crush direction confirms C. Est. gain assumes a full pin to C by expiry — an idealized
+      projection, not a guarantee. Click any row to open it in the Calculator. <b>Not financial advice.</b></p>
   </div><!-- /scanView -->
 </main>
 
@@ -345,9 +347,30 @@ function render(d){
   $("foot").innerHTML = `Total call OI ${fmtInt(d.total_call_oi)} · total put OI ${fmtInt(d.total_put_oi)} · `
     + `${d.mode.toUpperCase()} data · model: net-delta zero-crossing (Black-Scholes deltas over open interest).`;
 
+  renderSignals(d);
   renderPicks(d);
   drawProfile(d);
   drawChain(d);
+}
+
+function renderSignals(d){
+  const el=$("cSignals");
+  if(d.c_target==null){ el.innerHTML=""; return; }
+  const parts=[];
+  if(d.crush_direction){
+    const col = d.crush_direction==="DOWN" ? "var(--red)" : "var(--green)";
+    parts.push(`<span style="color:${col};font-weight:700">Crush ${d.crush_direction}</span> `
+      + `<span style="color:var(--muted)">(${d.expensive_side||"?"}s expensive)</span>`);
+  }
+  if(d.sweet_spot_low!=null)
+    parts.push(`Sweet spot <b>${fmt(d.sweet_spot_low)}–${fmt(d.sweet_spot_high)}</b>`);
+  if(d.confidence!=null){
+    const cls = d.confidence>=70?"mean":(d.confidence>=45?"max":"out");
+    parts.push(`Setup <span class="reach ${cls}">${Math.round(d.confidence)}/100</span>`);
+  }
+  if(d.direction_agree===false)
+    parts.push(`<span style="color:var(--amber)" title="crush direction conflicts with C">⚠ mixed direction</span>`);
+  el.innerHTML = parts.join(" &nbsp;·&nbsp; ");
 }
 
 function renderPicks(d){
@@ -514,6 +537,11 @@ function reachBadge(conf){
   if(conf==="out-of-range")return `<span class="reach out" title="move to C exceeds the ticker's proven 30d range">OUT</span>`;
   return `<span class="reach na" title="range data unavailable">n/a</span>`;
 }
+function confBadge(v){
+  if(v==null) return `<span class="reach na">—</span>`;
+  const cls = v>=70?"mean":(v>=45?"max":"out");
+  return `<span class="reach ${cls}" title="setup confidence 0-100 (direction agreement, crush fuel, pin steepness, reachability, liquidity)">${Math.round(v)}</span>`;
+}
 function renderScan(d){
   const cacheTxt = d.cached ? ` · cached ${d.age_seconds}s ago` : ` · ${d.elapsed_seconds}s`;
   const filtTxt = d.range_filter
@@ -534,17 +562,24 @@ function renderScan(d){
     const edgeArrow = r.edge_pct>=0 ? "▲" : "▼";
     const adr = r.adr_percent!=null ? r.adr_percent.toFixed(1)+"%" : "—";
     const mx  = r.max_range_percent!=null ? r.max_range_percent.toFixed(1)+"%" : "—";
+    const agreeMark = r.direction_agree===true
+      ? ` <span style="color:var(--green)" title="crush direction agrees with C">✓</span>`
+      : r.direction_agree===false
+      ? ` <span style="color:var(--red)" title="crush direction conflicts with C — weaker setup">⚠</span>` : "";
+    const crushTitle = r.expensive_side ? `${r.expensive_side}s expensive → dealers crush ${r.crush_direction}` : "";
+    const zoneTitle = r.sweet_spot_low!=null ? `sweet spot ${fmt(r.sweet_spot_low)}–${fmt(r.sweet_spot_high)}` : "";
     tr.innerHTML =
       `<td class="l rank">${i+1}</td>`+
       `<td class="l tk">${r.ticker}</td>`+
       `<td>${fmt(r.spot)}</td>`+
-      `<td>${fmt(r.c_target)}</td>`+
+      `<td title="${zoneTitle}">${fmt(r.c_target)}</td>`+
       `<td class="${edgeCls}">${edgeArrow} ${(Math.abs(r.edge_pct)*100).toFixed(2)}%</td>`+
-      `<td class="${sideCls}">${r.direction}</td>`+
+      `<td class="${sideCls}" title="${crushTitle}">${r.direction}${agreeMark}</td>`+
       `<td>${fmt(r.strike, r.strike>=100?0:1)}</td>`+
       `<td style="color:var(--muted)">${r.expiry||"—"}${multiWk?` <span class="reach na" style="padding:1px 5px">W${(r.week_index||0)+1}</span>`:""}</td>`+
       `<td>$${fmt(r.premium)}</td>`+
       `<td class="gain">+${(r.est_gain_pct*100).toFixed(0)}%</td>`+
+      `<td>${confBadge(r.confidence)}</td>`+
       `<td>${fmt(r.breakeven)}</td>`+
       `<td style="color:var(--dim)">${fmtInt(r.contract_oi)}</td>`+
       `<td style="color:var(--muted)">${adr} / ${mx}</td>`+
