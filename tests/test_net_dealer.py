@@ -191,6 +191,38 @@ def test_expected_move_bands():
           f"1σ=[{res.em_low},{res.em_high}] Cσ={res.c_sigma} reach={res.iv_reach}")
 
 
+def test_volume_blend_shifts_c_and_skew():
+    # Base symmetric OI (C at center). Add call-side VOLUME above the money -> the
+    # effective book tilts upside -> C moves DOWN, and volume skew reads call-side.
+    rows = []
+    for k in range(80, 121, 5):
+        dist = abs(k - 100)
+        oi = max(100.0, 2000.0 - dist * 60.0)
+        cvol = 3000.0 if k > 100 else 100.0     # incoming call volume above spot
+        rows.append(StrikeRow(strike=float(k), call_oi=oi, put_oi=oi,
+                              call_volume=cvol, put_volume=100.0,
+                              call_iv=0.35, put_iv=0.35))
+    c_oi = find_c_target(rows, T, volume_weight=0.0)
+    c_blend = find_c_target(rows, T, volume_weight=1.0)
+    assert c_blend < c_oi, f"call-side volume should pull C down: {c_blend} !< {c_oi}"
+    res = compute("T", "2099-01-15", rows, 100.0, T, 5.0, volume_weight=1.0)
+    assert res.volume_skew_side == "CALL"
+    assert res.volume_bias == "DOWN"           # call-side skew → pullback bias
+    assert res.total_call_volume > res.total_put_volume
+    print(f"ok  volume blend: C {c_oi}→{c_blend}, skew={res.volume_skew} "
+          f"side={res.volume_skew_side} bias={res.volume_bias}")
+
+
+def test_volume_disagreement_lowers_confidence():
+    # Same setup, direction agrees, but volume fighting the crush cuts the score.
+    agree = setup_confidence(True, 0.8, 0.8, range_reach="within-mean",
+                             iv_reach="within-1sig", liquidity_oi=5000, volume_agree=True)[0]
+    conflict = setup_confidence(True, 0.8, 0.8, range_reach="within-mean",
+                                iv_reach="within-1sig", liquidity_oi=5000, volume_agree=False)[0]
+    assert conflict < agree, "volume skewing against the thesis should lower confidence"
+    print(f"ok  volume conflict lowers confidence: {agree} -> {conflict}")
+
+
 def test_empty_chain_is_safe():
     res = compute("X", "2099-01-15", [], spot=None, t_years=T, dte=5.0)
     assert res.c_target is None

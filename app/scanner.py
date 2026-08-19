@@ -68,6 +68,8 @@ class ScanRow:
     expensive_side: Optional[str] = None        # CALL / PUT — richer OTM premium
     crush_direction: Optional[str] = None       # DOWN / UP — where dealers push
     direction_agree: Optional[bool] = None      # crush dir agrees with C vs spot
+    volume_bias: Optional[str] = None           # DOWN / UP — live volume skew read
+    volume_agree: Optional[bool] = None         # volume bias agrees with crush
     sweet_spot_low: Optional[float] = None
     sweet_spot_high: Optional[float] = None
     pin_steepness: Optional[float] = None
@@ -195,7 +197,8 @@ def evaluate(provider, ticker: str, week_index: int = 0) -> ScanRow:
 
     ty, dte = t_years(expiry)
     res = compute(ticker, expiry, rows, spot, ty, dte,
-                  r=settings.risk_free_rate, fallback_iv=settings.fallback_iv)
+                  r=settings.risk_free_rate, fallback_iv=settings.fallback_iv,
+                  volume_weight=settings.volume_weight)
     c = res.c_target
     base = ScanRow(ticker=ticker, spot=spot, c_target=c,
                    edge_pct=None, direction=None, expiry=expiry, dte=round(dte, 2),
@@ -240,6 +243,8 @@ def evaluate(provider, ticker: str, week_index: int = 0) -> ScanRow:
     base.expensive_side = res.expensive_side
     base.crush_direction = res.crush_direction
     base.direction_agree = res.direction_agree
+    base.volume_bias = res.volume_bias
+    base.volume_agree = res.volume_agree
     base.sweet_spot_low = res.sweet_spot_low
     base.sweet_spot_high = res.sweet_spot_high
     base.pin_steepness = res.pin_steepness
@@ -250,7 +255,8 @@ def evaluate(provider, ticker: str, week_index: int = 0) -> ScanRow:
                        else res.put_crush_pct if res.expensive_side == "PUT" else None)
     score, breakdown = setup_confidence(res.direction_agree, expensive_crush,
                                         res.pin_steepness, range_reach=range_conf,
-                                        iv_reach=res.iv_reach, liquidity_oi=base.contract_oi)
+                                        iv_reach=res.iv_reach, liquidity_oi=base.contract_oi,
+                                        volume_agree=res.volume_agree)
     base.confidence = score
     base.confidence_breakdown = breakdown
     base.opportunity_score = round(base.est_gain_pct * score / 100.0, 4)

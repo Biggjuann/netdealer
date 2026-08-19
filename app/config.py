@@ -77,6 +77,10 @@ class Settings:
     # ----- Net-dealer model knobs -------------------------------------------
     risk_free_rate: float = field(default_factory=lambda: _float("RISK_FREE_RATE", 0.043))
     fallback_iv: float = field(default_factory=lambda: _float("FALLBACK_IV", 0.40))
+    # Effective dealer inventory = Open Interest + VOLUME_WEIGHT × session Volume.
+    # OI is the stale "known inventory"; volume is the live "dynamic inventory"
+    # (where new activity is entering). 0 = OI only (legacy); 1 = weight equally.
+    volume_weight: float = field(default_factory=lambda: _float("VOLUME_WEIGHT", 1.0))
     # How many strikes (each side of the money) to pull for the chain.
     strike_count: int = field(default_factory=lambda: _int("STRIKE_COUNT", 80))
     # How far out (days) to look when listing available expirations.

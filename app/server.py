@@ -81,6 +81,7 @@ def net_dealer(ticker: str = Query(..., min_length=1),
         ticker=ticker, expiry=expiry, rows=rows, spot=spot,
         t_years=ty, dte=dte,
         r=settings.risk_free_rate, fallback_iv=settings.fallback_iv,
+        volume_weight=settings.volume_weight,
     )
     payload = asdict(result)
     payload["mode"] = "live" if settings.live else "mock"
@@ -105,7 +106,8 @@ def net_dealer(ticker: str = Query(..., min_length=1),
                            else result.put_crush_pct if result.expensive_side == "PUT" else None)
         score, breakdown = setup_confidence(result.direction_agree, expensive_crush,
                                             result.pin_steepness, range_reach=range_conf,
-                                            iv_reach=result.iv_reach, liquidity_oi=liq_oi)
+                                            iv_reach=result.iv_reach, liquidity_oi=liq_oi,
+                                            volume_agree=result.volume_agree)
         payload["confidence"] = score
         payload["confidence_breakdown"] = breakdown
         payload["range_conf"] = range_conf

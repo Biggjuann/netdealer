@@ -101,8 +101,11 @@ class MockChainProvider:
         n = (strike_count or 60) // 2
         # Per-ticker OI skew so different names land C above/below/at spot — makes
         # the scanner demo interesting instead of every C pinning to spot.
-        skew = (((sum(ord(c) for c in ticker.upper()) % 11) - 5) / 100.0)  # -0.05..+0.05
+        h = sum(ord(c) for c in ticker.upper())
+        skew = (((h % 11) - 5) / 100.0)  # -0.05..+0.05
         call_center, put_center = 0.03 + skew, -0.035 + skew
+        # Per-ticker volume tilt so the OI-vs-volume skew signal isn't uniform.
+        vtilt = (((h % 7) - 3) / 20.0)   # -0.15..+0.15 (+ = heavier call-side volume)
         ty, _ = t_years(expiry)
         ty = max(ty, 3.0 / 365.0)             # keep some extrinsic value in the demo
         center = round(spot / step) * step    # ladder centered on nearest step to spot
@@ -121,7 +124,8 @@ class MockChainProvider:
             rows.append(StrikeRow(
                 strike=k,
                 call_oi=call_oi, put_oi=put_oi,
-                call_volume=round(call_oi * 0.4), put_volume=round(put_oi * 0.4),
+                call_volume=round(call_oi * max(0.05, 0.4 + vtilt)),
+                put_volume=round(put_oi * max(0.05, 0.4 - vtilt)),
                 call_iv=round(iv, 4), put_iv=round(iv + 0.01, 4),
                 call_ask=round(max(0.05, bs_price(spot, k, ty, iv, True)), 2),
                 put_ask=round(max(0.05, bs_price(spot, k, ty, iv + 0.01, False)), 2),

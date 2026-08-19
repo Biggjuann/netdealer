@@ -22,7 +22,7 @@ For a candidate underlying price `P`, the **net dealer directional exposure** of
 the open-interest book is
 
 ```
-netDelta(P) = 100 · Σ_strikes [ Δcall(P,K)·OI_call(K) + Δput(P,K)·OI_put(K) ]
+netDelta(P) = 100 · Σ_strikes [ Δcall(P,K)·Inv_call(K) + Δput(P,K)·Inv_put(K) ]
 ```
 
 where `Δcall ∈ [0,1]` and `Δput = Δcall − 1 ∈ [−1,0]` are Black–Scholes deltas
@@ -58,9 +58,33 @@ calls OTM / the book balanced); a bigger put wall below pulls **C up**. C sits
 between the two walls — the "crush" zone in the framework.
 
 > ⚠️ **Not financial advice.** This is a transparent re-implementation of the
-> *concept* using standard dealer-positioning math (BS deltas over open
-> interest). It is not the proprietary Wave engine and makes the usual
-> simplifying assumption that OI is customer-long / dealer-short.
+> *concept* using standard dealer-positioning math. It is not the proprietary
+> Wave engine and makes the usual assumption that OI is customer-long / dealer-short.
+
+### Known + dynamic inventory (OI + Volume)
+
+Open Interest alone is a **stale** snapshot — the exchange only updates it ~once a
+day. The real system blends it with **session Volume**, which updates live and
+shows where *new* activity is entering. So netDIR / C / the centroids are weighted
+by **effective inventory**:
+
+```
+Inv(K) = OpenInterest(K)  +  VOLUME_WEIGHT · Volume(K)
+```
+
+(`Inv_call` / `Inv_put` in the formula above; `VOLUME_WEIGHT` defaults to 1.0).
+In the chain, **blue = OI (known)** and **orange = Volume (dynamic)**.
+
+**Volume skew** is its own directional signal: if incoming volume skews more
+call-side than OI implies, writers are positioning for a **pullback** (`volume_bias
+= DOWN`); put-side skew tilts **UP**. When the volume bias *conflicts* with the
+crush direction (the landscape is shifting), the setup confidence is docked and the
+scanner marks the trade with a ⚡.
+
+> **C is the centerpoint of the Dealer Inventory Risk range — a directional
+> framework, not an exact target.** Price may acquire the full range, part of it,
+> or none as new information enters. The reachability signals below estimate how
+> much of it is realistically in play.
 
 ---
 

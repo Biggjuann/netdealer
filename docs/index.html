@@ -90,6 +90,8 @@
   .ndbar .fill.pos{background:linear-gradient(90deg,rgba(248,113,113,.4),var(--red))}
   .ndbar .fill.neg{background:linear-gradient(90deg,var(--green),rgba(52,211,153,.4))}
   .oicell{color:var(--dim)}
+  td.oi{color:#7aa2f7}   /* blue = known inventory (Open Interest) */
+  td.vol{color:#e8a33d}  /* orange = dynamic inventory (session Volume) */
   .tblwrap{max-height:70vh;overflow:auto;border:1px solid var(--line);border-radius:12px}
   #msg{color:var(--amber);font-size:13px;margin:10px 0}
   .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin-top:10px}
@@ -162,10 +164,11 @@
   <div id="calcView">
   <div class="hero">
     <div class="cbox">
-      <div class="lab">🎯 Net Dealer Target "C"</div>
+      <div class="lab">🎯 Net Dealer "C" · DIR centerpoint</div>
       <div class="price mono" id="cPrice">—</div>
       <div class="sub" id="cSub">Select a ticker &amp; expiry, then Calculate.</div>
       <div class="sub" id="cSignals" style="margin-top:9px;font-size:12px"></div>
+      <div class="sub" id="cNote" style="margin-top:6px;font-size:10.5px;color:var(--dim)"></div>
     </div>
     <div class="stats">
       <div class="stat"><div class="k">Spot</div><div class="v mono" id="sSpot">—</div><div class="d" id="sSpotD"></div></div>
@@ -212,7 +215,9 @@
   <div class="panel">
     <h3>Option Chain — dealer inventory by strike</h3>
     <p class="hint">Calls (left) · Strike · netDIR at that strike · Puts (right). The
-      <span style="color:var(--pink)">C row</span> is highlighted; Call/Put walls are outlined.</p>
+      <span style="color:var(--pink)">C row</span> is highlighted; Call/Put walls are outlined.
+      <span style="color:#7aa2f7">OI = known inventory</span> · <span style="color:#e8a33d">Volume = live/dynamic inventory</span>
+      (netDIR &amp; C blend both).</p>
     <div class="tblwrap">
       <table>
         <thead><tr>
@@ -386,9 +391,18 @@ function renderSignals(d){
     parts.push(`Exp move <b>±$${fmt(d.expected_move)}</b> (${(d.expected_move_pct*100).toFixed(1)}%, 1σ)`
       + ` · C <span class="reach ${ivcls}" title="move to C in IV expected-move σ">${d.c_sigma}σ</span>`);
   }
+  if(d.volume_bias){
+    const vcol = d.volume_bias==="DOWN" ? "var(--red)" : "var(--green)";
+    const vtag = d.volume_agree===false
+      ? ` <span style="color:var(--amber)" title="live volume is entering against the crush thesis — landscape shifting">⚠ vs crush</span>`
+      : (d.volume_agree===true ? ` <span style="color:var(--green)">✓</span>` : "");
+    parts.push(`Vol skew <span style="color:${vcol};font-weight:700">${d.volume_bias}</span>${vtag}`);
+  }
   if(d.direction_agree===false)
     parts.push(`<span style="color:var(--amber)" title="crush direction conflicts with C">⚠ mixed direction</span>`);
   el.innerHTML = parts.join(" &nbsp;·&nbsp; ");
+  $("cNote").innerHTML = "C is the <b>centerpoint of the Dealer Inventory Risk range</b> — a directional bias, "
+    + "not an exact target. netDIR &amp; C blend Open Interest (known) with live Volume (dynamic).";
 }
 
 function renderPicks(d){
@@ -585,12 +599,12 @@ function drawChain(d){
     if(isPw) tags+=`<span class="tag pw">PW</span>`;
     if(isSpot) tags+=`<span class="tag sp">SPOT</span>`;
     tr.innerHTML =
-      `<td class="oicell">${fmtInt(r.call_oi)}</td><td class="oicell">${fmtInt(r.call_volume)}</td>`+
+      `<td class="oi">${fmtInt(r.call_oi)}</td><td class="vol">${fmtInt(r.call_volume)}</td>`+
       `<td>${r.call_iv!==null?(r.call_iv*100).toFixed(1):"—"}</td><td>${fmt(r.call_ask)}</td>`+
       `<td class="strikeCol ${isCw?'wallCall':''} ${isPw?'wallPut':''}">${fmt(r.strike,r.strike>=100?0:1)}${tags}</td>`+
       `<td class="ndcell">${bar}<div style="font-size:9px;color:var(--dim);text-align:center">${pct(r.netdir)}</div></td>`+
       `<td>${fmt(r.put_ask)}</td><td>${r.put_iv!==null?(r.put_iv*100).toFixed(1):"—"}</td>`+
-      `<td class="oicell">${fmtInt(r.put_volume)}</td><td class="oicell">${fmtInt(r.put_oi)}</td>`;
+      `<td class="vol">${fmtInt(r.put_volume)}</td><td class="oi">${fmtInt(r.put_oi)}</td>`;
     body.appendChild(tr);
   });
 }
@@ -660,7 +674,11 @@ function renderScan(d){
       ? ` <span style="color:var(--green)" title="crush direction agrees with C">✓</span>`
       : r.direction_agree===false
       ? ` <span style="color:var(--red)" title="crush direction conflicts with C — weaker setup">⚠</span>` : "";
-    const crushTitle = r.expensive_side ? `${r.expensive_side}s expensive → dealers crush ${r.crush_direction}` : "";
+    const volMark = r.volume_agree===false
+      ? ` <span style="color:var(--amber)" title="live volume skewing ${r.volume_bias} — against the crush thesis">⚡</span>` : "";
+    const crushTitle = r.expensive_side
+      ? `${r.expensive_side}s expensive → crush ${r.crush_direction}`
+        + (r.volume_bias?` · volume skew ${r.volume_bias}${r.volume_agree===false?" (conflicts)":" (confirms)"}`:"") : "";
     const zoneTitle = r.sweet_spot_low!=null ? `sweet spot ${fmt(r.sweet_spot_low)}–${fmt(r.sweet_spot_high)}` : "";
     tr.innerHTML =
       `<td class="l rank">${i+1}</td>`+
@@ -668,7 +686,7 @@ function renderScan(d){
       `<td>${fmt(r.spot)}</td>`+
       `<td title="${zoneTitle}">${fmt(r.c_target)}</td>`+
       `<td class="${edgeCls}">${edgeArrow} ${(Math.abs(r.edge_pct)*100).toFixed(2)}%</td>`+
-      `<td class="${sideCls}" title="${crushTitle}">${r.direction}${agreeMark}</td>`+
+      `<td class="${sideCls}" title="${crushTitle}">${r.direction}${agreeMark}${volMark}</td>`+
       `<td>${fmt(r.strike, r.strike>=100?0:1)}</td>`+
       `<td style="color:var(--muted)">${r.expiry||"—"}${multiWk?` <span class="reach na" style="padding:1px 5px">W${(r.week_index||0)+1}</span>`:""}</td>`+
       `<td>$${fmt(r.premium)}</td>`+

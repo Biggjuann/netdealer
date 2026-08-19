@@ -140,6 +140,13 @@ class NetDealerResult:
     # --- crush / zone / pin signals (the creator's "how it trades" logic) ---
     call_crush_pct: Optional[float] = None   # share of call OI that is OTM
     put_crush_pct: Optional[float] = None     # share of put OI that is OTM
+    # --- volume skew: where LIVE activity is entering vs the stale OI ---
+    total_call_volume: float = 0.0
+    total_put_volume: float = 0.0
+    volume_skew: Optional[float] = None       # call-vol share − call-OI share (+ = call-side building)
+    volume_skew_side: Optional[str] = None    # CALL / PUT — side volume is skewing toward vs OI
+    volume_bias: Optional[str] = None         # DOWN / UP — call-side skew → pullback (down)
+    volume_agree: Optional[bool] = None       # volume bias agrees with the crush direction
     expensive_side: Optional[str] = None      # CALL / PUT — where the OTM premium sits
     crush_direction: Optional[str] = None     # DOWN / UP — where dealers push price
     trade_side: Optional[str] = None          # CALL / PUT to buy toward C
@@ -186,10 +193,12 @@ def _iv_reach_component(iv_reach: Optional[str]) -> float:
 
 def setup_confidence(direction_agree: Optional[bool], expensive_crush_pct: Optional[float],
                      pin_steepness: Optional[float], range_reach: Optional[str] = None,
-                     iv_reach: Optional[str] = None, liquidity_oi: Optional[float] = None):
+                     iv_reach: Optional[str] = None, liquidity_oi: Optional[float] = None,
+                     volume_agree: Optional[bool] = None):
     """Blend the creator's confirmations into a 0..100 setup score.
 
     * direction  — does the crush (expensive-side) direction agree with C vs spot?
+                   Penalised when live VOLUME is entering against that thesis.
     * range      — is the move to C within the 30d realized range? (neutral if unknown)
     * iv         — is C within the IV-implied expected move (±σ)? (neutral if unknown)
     * fuel       — how much of the expensive side's OI is OTM premium to crush.
@@ -199,6 +208,8 @@ def setup_confidence(direction_agree: Optional[bool], expensive_crush_pct: Optio
     Returns (score 0..100, breakdown dict of each 0..1 component).
     """
     direction = 1.0 if direction_agree else (0.15 if direction_agree is False else 0.5)
+    if volume_agree is False:
+        direction *= 0.75    # new session volume is skewing against the crush thesis
     fuel = 0.0
     if expensive_crush_pct is not None:
         fuel = max(0.0, min(1.0, (expensive_crush_pct - 0.40) / 0.50))
@@ -229,37 +240,54 @@ def expected_move(spot: Optional[float], iv: Optional[float], t_years: float) ->
     return spot * iv * math.sqrt(t_years)
 
 
+def _eff_call(row: StrikeRow, w: float) -> float:
+    """Effective call inventory = OI (known) + w × Volume (dynamic)."""
+    return row.call_oi + w * row.call_volume
+
+
+def _eff_put(row: StrikeRow, w: float) -> float:
+    return row.put_oi + w * row.put_volume
+
+
 def net_delta_at(price: float, rows: List[StrikeRow], t_years: float,
-                 r: float = DEFAULT_RATE, fallback_iv: float = DEFAULT_IV) -> float:
-    """Aggregate net dealer directional exposure of the OI book at ``price``.
+                 r: float = DEFAULT_RATE, fallback_iv: float = DEFAULT_IV,
+                 volume_weight: float = 0.0) -> float:
+    """Aggregate net dealer directional exposure at ``price``.
+
+    Weighted by **effective inventory** = OI + volume_weight × Volume, so the
+    stale once-a-day OI is adjusted by where live session volume is entering.
 
     Positive → book is net-long upside (dealers net-short → want price down).
     Negative → book is net-long downside (dealers net-long → want price up).
-    Returns raw contract-delta * 100 (share-equivalent) units.
     """
     T = max(t_years, _MIN_T)
     total = 0.0
     for row in rows:
-        if row.call_oi:
-            total += bs_call_delta(price, row.strike, T, row.call_sigma(fallback_iv), r) * row.call_oi
-        if row.put_oi:
-            total += bs_put_delta(price, row.strike, T, row.put_sigma(fallback_iv), r) * row.put_oi
+        cw = _eff_call(row, volume_weight)
+        pw = _eff_put(row, volume_weight)
+        if cw:
+            total += bs_call_delta(price, row.strike, T, row.call_sigma(fallback_iv), r) * cw
+        if pw:
+            total += bs_put_delta(price, row.strike, T, row.put_sigma(fallback_iv), r) * pw
     return total * 100.0
 
 
 def netdir_pct_at(price: float, rows: List[StrikeRow], t_years: float,
-                  r: float = DEFAULT_RATE, fallback_iv: float = DEFAULT_IV) -> float:
-    """``net_delta_at`` normalised to [-1, 1] by total OI (the screenshot's %)."""
-    total_oi = sum(row.call_oi + row.put_oi for row in rows)
-    if total_oi <= 0:
+                  r: float = DEFAULT_RATE, fallback_iv: float = DEFAULT_IV,
+                  volume_weight: float = 0.0) -> float:
+    """``net_delta_at`` normalised to [-1, 1] by total effective inventory."""
+    total = sum(_eff_call(row, volume_weight) + _eff_put(row, volume_weight) for row in rows)
+    if total <= 0:
         return 0.0
-    return net_delta_at(price, rows, t_years, r, fallback_iv) / (total_oi * 100.0)
+    return net_delta_at(price, rows, t_years, r, fallback_iv, volume_weight) / (total * 100.0)
 
 
 def find_c_target(rows: List[StrikeRow], t_years: float, r: float = DEFAULT_RATE,
-                  fallback_iv: float = DEFAULT_IV, iters: int = 60) -> Optional[float]:
+                  fallback_iv: float = DEFAULT_IV, iters: int = 60,
+                  volume_weight: float = 0.0) -> Optional[float]:
     """Bisect the (monotone-increasing) netDelta curve for its zero crossing."""
-    strikes = [row.strike for row in rows if (row.call_oi or row.put_oi)]
+    strikes = [row.strike for row in rows
+               if (_eff_call(row, volume_weight) or _eff_put(row, volume_weight))]
     if len(strikes) < 2:
         return None
     lo, hi = min(strikes), max(strikes)
@@ -267,15 +295,15 @@ def find_c_target(rows: List[StrikeRow], t_years: float, r: float = DEFAULT_RATE
     span = hi - lo
     lo -= 0.5 * span
     hi += 0.5 * span
-    f_lo = net_delta_at(lo, rows, t_years, r, fallback_iv)
-    f_hi = net_delta_at(hi, rows, t_years, r, fallback_iv)
+    f_lo = net_delta_at(lo, rows, t_years, r, fallback_iv, volume_weight)
+    f_hi = net_delta_at(hi, rows, t_years, r, fallback_iv, volume_weight)
     if f_lo > 0:          # dealers net-short across the whole range → C at/below floor
         return round(min(strikes), 2)
     if f_hi < 0:          # dealers net-long across the whole range → C at/above cap
         return round(max(strikes), 2)
     for _ in range(iters):
         mid = 0.5 * (lo + hi)
-        if net_delta_at(mid, rows, t_years, r, fallback_iv) < 0:
+        if net_delta_at(mid, rows, t_years, r, fallback_iv, volume_weight) < 0:
             lo = mid
         else:
             hi = mid
@@ -300,10 +328,12 @@ def max_pain(rows: List[StrikeRow]) -> Optional[float]:
     return best_strike
 
 
-def _oi_weighted_strike(rows: List[StrikeRow], side: str) -> Optional[float]:
+def _oi_weighted_strike(rows: List[StrikeRow], side: str,
+                        volume_weight: float = 0.0) -> Optional[float]:
+    """Effective-inventory-weighted average strike (the Long/Short-Avg centroid)."""
     num = den = 0.0
     for row in rows:
-        oi = row.call_oi if side == "call" else row.put_oi
+        oi = _eff_call(row, volume_weight) if side == "call" else _eff_put(row, volume_weight)
         num += oi * row.strike
         den += oi
     return round(num / den, 2) if den > 0 else None
@@ -320,14 +350,19 @@ def _peak_oi_strike(rows: List[StrikeRow], side: str) -> Optional[float]:
 
 def compute(ticker: str, expiry: str, rows: List[StrikeRow], spot: Optional[float],
             t_years: float, dte: float, r: float = DEFAULT_RATE,
-            fallback_iv: float = DEFAULT_IV) -> NetDealerResult:
-    """Assemble the full net-dealer picture from a merged strike table."""
+            fallback_iv: float = DEFAULT_IV, volume_weight: float = 0.0) -> NetDealerResult:
+    """Assemble the full net-dealer picture from a merged strike table.
+
+    ``volume_weight`` blends live session Volume into the stale OI when deriving
+    netDIR / C / the inventory centroids (effective inventory = OI + w·Volume).
+    """
     rows = sorted(rows, key=lambda x: x.strike)
+    vw = volume_weight
     total_call_oi = sum(r_.call_oi for r_ in rows)
     total_put_oi = sum(r_.put_oi for r_ in rows)
 
-    c_target = find_c_target(rows, t_years, r, fallback_iv)
-    c_netdir = (round(netdir_pct_at(c_target, rows, t_years, r, fallback_iv), 4)
+    c_target = find_c_target(rows, t_years, r, fallback_iv, volume_weight=vw)
+    c_netdir = (round(netdir_pct_at(c_target, rows, t_years, r, fallback_iv, vw), 4)
                 if c_target is not None else None)
 
     per_strike: List[dict] = []
@@ -343,7 +378,7 @@ def compute(ticker: str, expiry: str, rows: List[StrikeRow], spot: Optional[floa
             "call_ask": row.call_ask,
             "put_ask": row.put_ask,
             # netDIR evaluated at this strike's price (the screenshot's column).
-            "netdir": round(netdir_pct_at(row.strike, rows, t_years, r, fallback_iv), 4),
+            "netdir": round(netdir_pct_at(row.strike, rows, t_years, r, fallback_iv, vw), 4),
         })
 
     note = ""
@@ -352,7 +387,7 @@ def compute(ticker: str, expiry: str, rows: List[StrikeRow], spot: Optional[floa
     elif total_call_oi + total_put_oi == 0:
         note = "Chain has no open interest yet (pre-market or brand-new expiry)."
 
-    short_avg = _oi_weighted_strike(rows, "put")
+    short_avg = _oi_weighted_strike(rows, "put", vw)
     sig = _crush_signals(rows, spot, c_target, short_avg, per_strike, t_years)
 
     return NetDealerResult(
@@ -365,7 +400,7 @@ def compute(ticker: str, expiry: str, rows: List[StrikeRow], spot: Optional[floa
         max_pain=max_pain(rows),
         call_wall=_peak_oi_strike(rows, "call"),
         put_wall=_peak_oi_strike(rows, "put"),
-        long_avg=_oi_weighted_strike(rows, "call"),
+        long_avg=_oi_weighted_strike(rows, "call", vw),
         short_avg=short_avg,
         total_call_oi=total_call_oi,
         total_put_oi=total_put_oi,
@@ -388,7 +423,10 @@ def _crush_signals(rows: List[StrikeRow], spot: Optional[float], c_target: Optio
     * pin steepness — how sharply netDIR flips across the strikes bracketing C.
     * confidence — chain-based blend (reachability/liquidity left neutral here).
     """
-    out = dict(call_crush_pct=None, put_crush_pct=None, expensive_side=None,
+    out = dict(call_crush_pct=None, put_crush_pct=None,
+               total_call_volume=0.0, total_put_volume=0.0, volume_skew=None,
+               volume_skew_side=None, volume_bias=None, volume_agree=None,
+               expensive_side=None,
                crush_direction=None, trade_side=None, direction_agree=None,
                sweet_spot_low=None, sweet_spot_high=None, pin_steepness=None,
                atm_iv=None, expected_move=None, expected_move_pct=None,
@@ -429,6 +467,20 @@ def _crush_signals(rows: List[StrikeRow], spot: Optional[float], c_target: Optio
         out["expensive_side"] = "CALL" if call_otm_prem >= put_otm_prem else "PUT"
         out["crush_direction"] = "DOWN" if out["expensive_side"] == "CALL" else "UP"
 
+    # Volume skew: is live activity entering more call- or put-side than the OI
+    # already implies? A call-side volume skew = writers positioning for a pullback.
+    call_vol = sum(r.call_volume for r in rows)
+    put_vol = sum(r.put_volume for r in rows)
+    out["total_call_volume"], out["total_put_volume"] = call_vol, put_vol
+    vol_tot, oi_tot = call_vol + put_vol, call_tot_oi + put_tot_oi
+    if vol_tot > 0 and oi_tot > 0:
+        skew = (call_vol / vol_tot) - (call_tot_oi / oi_tot)   # + = call-side building
+        out["volume_skew"] = round(skew, 4)
+        out["volume_skew_side"] = "CALL" if skew >= 0 else "PUT"
+        out["volume_bias"] = "DOWN" if skew >= 0 else "UP"     # call-skew → pullback
+        if out["crush_direction"] is not None:
+            out["volume_agree"] = (out["volume_bias"] == out["crush_direction"])
+
     if c_target is not None:
         out["trade_side"] = "CALL" if c_target > spot else "PUT"
         # crush of the expensive side implies buying the opposite side
@@ -447,7 +499,8 @@ def _crush_signals(rows: List[StrikeRow], spot: Optional[float], c_target: Optio
     # scanner/endpoint recompute the full score with those). IV reach IS known
     # here, so it contributes even to the calculator's base confidence.
     score, breakdown = setup_confidence(out["direction_agree"], expensive_crush,
-                                        out["pin_steepness"], iv_reach=out["iv_reach"])
+                                        out["pin_steepness"], iv_reach=out["iv_reach"],
+                                        volume_agree=out["volume_agree"])
     out["confidence"] = score
     out["confidence_breakdown"] = breakdown
     return out
