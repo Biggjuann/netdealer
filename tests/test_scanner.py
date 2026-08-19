@@ -107,20 +107,18 @@ def test_run_scan_multiweek():
     print(f"ok  multiweek: {both['evaluations']} evaluations across weeks {both['weeks']}")
 
 
-def test_scan_ranks_by_opportunity_score():
+def test_scan_ranks_by_confidence():
     prov = MockChainProvider()
     d = run_scan(prov, tickers=["NVDA", "AAPL", "TSLA", "PFE", "LLY", "JPM", "GS", "COIN"],
                  use_cache=False)
-    scores = [r["opportunity_score"] for r in d["results"]]
-    assert scores == sorted(scores, reverse=True), "ranked by reward × confidence"
+    # Best setups first: sorted by Setup confidence, then est_gain as a tiebreaker.
+    keys = [(r["confidence"], r["est_gain_pct"]) for r in d["results"]]
+    assert keys == sorted(keys, reverse=True), "must rank by confidence, then gain, descending"
     for r in d["results"]:
         assert 0 <= r["confidence"] <= 100
-        assert r["opportunity_score"] is not None
-        # opportunity_score == est_gain × confidence/100 (within rounding)
-        assert abs(r["opportunity_score"] - r["est_gain_pct"] * r["confidence"] / 100) < 0.01
         assert r["expensive_side"] in ("CALL", "PUT", None)
         assert r["sweet_spot_low"] is not None and r["sweet_spot_high"] is not None
-    print(f"ok  scan ranked by opportunity_score; top conf={d['results'][0]['confidence']}")
+    print(f"ok  scan ranked by confidence (best first); top conf={d['results'][0]['confidence']}")
 
 
 def test_run_scan_cache():
