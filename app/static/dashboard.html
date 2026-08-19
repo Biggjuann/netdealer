@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Net Dealer Target · "C" Calculator</title>
+<style>
+  :root{
+    --bg:#070b14; --panel:#0d1320; --panel2:#111a2b; --line:#1c2740;
+    --txt:#e6edf7; --muted:#7e8aa3; --dim:#56627d;
+    --teal:#22d3b7; --green:#34d399; --red:#f87171; --amber:#fbbf24;
+    --blue:#38bdf8; --violet:#a78bfa; --pink:#ec4899;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 700px at 80% -10%,#0e1830 0%,var(--bg) 55%);
+    color:var(--txt);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .mono{font-family:"SF Mono",ui-monospace,"Roboto Mono",Menlo,monospace;font-variant-numeric:tabular-nums}
+  a{color:var(--teal)}
+  header{display:flex;align-items:center;gap:14px;padding:13px 20px;flex-wrap:wrap;
+    border-bottom:1px solid var(--line);background:rgba(8,12,22,.75);backdrop-filter:blur(8px);
+    position:sticky;top:0;z-index:20}
+  .brand{font-weight:800;letter-spacing:.5px;font-size:17px;white-space:nowrap}
+  .brand b{color:var(--teal)}
+  .brand .c{color:var(--pink)}
+  .badge{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;
+    padding:4px 9px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+  .badge.live{color:#04140f;background:var(--green);border-color:transparent}
+  .badge.mock{color:var(--blue);border-color:rgba(56,189,248,.35)}
+  .spacer{flex:1}
+  select,input,button{font:inherit;color:var(--txt);background:var(--panel2);
+    border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+  select:focus,input:focus{outline:none;border-color:var(--teal)}
+  input.tick{width:130px;text-transform:uppercase}
+  button.go{cursor:pointer;font-weight:700;letter-spacing:.4px;color:#04140f;background:var(--teal);
+    border-color:transparent;padding:8px 16px}
+  button.go:hover{filter:brightness(1.08)}
+  button.go:disabled{opacity:.5;cursor:default}
+  .ctl{display:flex;align-items:center;gap:6px}
+  .ctl label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .gear{cursor:pointer;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;color:var(--muted)}
+  .gear:hover{color:var(--teal);border-color:var(--teal)}
+  main{padding:20px;max-width:1400px;margin:0 auto}
+  .hero{display:grid;grid-template-columns:minmax(230px,1fr) 2fr;gap:18px;margin-bottom:18px}
+  @media(max-width:860px){.hero{grid-template-columns:1fr}}
+  .cbox{background:linear-gradient(160deg,rgba(236,72,153,.14),var(--panel));
+    border:1px solid rgba(236,72,153,.35);border-radius:16px;padding:20px 22px;position:relative;overflow:hidden}
+  .cbox .lab{font-size:12px;letter-spacing:1.2px;text-transform:uppercase;color:var(--pink);font-weight:800}
+  .cbox .price{font-size:52px;font-weight:800;line-height:1.05;margin:6px 0 2px}
+  .cbox .sub{color:var(--muted);font-size:13px}
+  .cbox .sub b{color:var(--txt)}
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:560px){.stats{grid-template-columns:repeat(2,1fr)}}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:13px 15px}
+  .stat .k{font-size:10.5px;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
+  .stat .v{font-size:22px;font-weight:800;margin-top:3px}
+  .stat .d{font-size:11px;color:var(--dim);margin-top:1px}
+  .v.up{color:var(--red)} .v.dn{color:var(--green)}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px 18px;margin-bottom:18px}
+  .panel h3{margin:0 0 4px;font-size:13px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}
+  .panel .hint{font-size:11.5px;color:var(--dim);margin:0 0 12px}
+  .profile{width:100%;height:230px;display:block;cursor:crosshair}
+  .profilewrap{position:relative}
+  .charttip{position:absolute;pointer-events:none;display:none;z-index:8;
+    background:rgba(10,15,26,.97);border:1px solid var(--line);border-radius:8px;
+    padding:7px 10px;font-size:11.5px;line-height:1.5;white-space:nowrap;
+    box-shadow:0 8px 22px -8px #000}
+  .charttip b{color:var(--txt);font-variant-numeric:tabular-nums}
+  .charttip .k{color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{padding:5px 8px;text-align:right;white-space:nowrap}
+  thead th{position:sticky;top:56px;background:var(--panel);color:var(--muted);font-weight:700;
+    font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;border-bottom:1px solid var(--line);z-index:5}
+  .strikeCol{text-align:center;font-weight:800;color:var(--txt);background:var(--panel2);border-left:1px solid var(--line);border-right:1px solid var(--line)}
+  .callHdr{color:var(--green)} .putHdr{color:var(--red)}
+  tbody tr:hover{background:rgba(56,189,248,.05)}
+  tr.crow{background:rgba(236,72,153,.14)!important;box-shadow:inset 3px 0 0 var(--pink),inset -3px 0 0 var(--pink)}
+  tr.crow .strikeCol{color:var(--pink)}
+  .wallCall{box-shadow:inset 0 0 0 1px rgba(52,211,153,.5)}
+  .wallPut{box-shadow:inset 0 0 0 1px rgba(248,113,113,.5)}
+  .tag{font-size:9px;font-weight:800;letter-spacing:.4px;padding:1px 5px;border-radius:5px;margin-left:5px;vertical-align:middle}
+  .tag.c{background:var(--pink);color:#170310}
+  .tag.cw{background:rgba(52,211,153,.18);color:var(--green)}
+  .tag.pw{background:rgba(248,113,113,.18);color:var(--red)}
+  .tag.sp{background:rgba(56,189,248,.18);color:var(--blue)}
+  .ndcell{width:150px}
+  .ndbar{position:relative;height:12px;background:var(--panel2);border-radius:3px;overflow:hidden}
+  .ndbar .mid{position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--dim)}
+  .ndbar .fill{position:absolute;top:0;bottom:0}
+  .ndbar .fill.pos{background:linear-gradient(90deg,rgba(248,113,113,.4),var(--red))}
+  .ndbar .fill.neg{background:linear-gradient(90deg,var(--green),rgba(52,211,153,.4))}
+  .oicell{color:var(--dim)}
+  td.oi{color:#7aa2f7}   /* blue = known inventory (Open Interest) */
+  td.vol{color:#e8a33d}  /* orange = dynamic inventory (session Volume) */
+  .tblwrap{max-height:70vh;overflow:auto;border:1px solid var(--line);border-radius:12px}
+  #msg{color:var(--amber);font-size:13px;margin:10px 0}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin-top:10px}
+  .legend span{display:inline-flex;align-items:center;gap:5px}
+  .sw{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .modal{position:fixed;inset:0;background:rgba(2,5,12,.7);display:none;align-items:center;justify-content:center;z-index:50}
+  .modal.on{display:flex}
+  .modal .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;max-width:440px;width:92%}
+  .modal h4{margin:0 0 10px} .modal p{color:var(--muted);font-size:12.5px}
+  .modal input{width:100%;margin:8px 0 14px}
+  .foot{color:var(--dim);font-size:11px;text-align:center;margin:26px 0 8px;line-height:1.7}
+  .loading{opacity:.45;pointer-events:none}
+  /* tabs */
+  .tabs{display:flex;gap:8px;margin-bottom:16px}
+  .tab{cursor:pointer;font-size:13px;font-weight:700;letter-spacing:.3px;color:var(--muted);
+    background:var(--panel);border:1px solid var(--line);padding:9px 16px;border-radius:10px;transition:.15s}
+  .tab.active{color:var(--teal);border-color:rgba(34,211,183,.4);background:rgba(34,211,183,.08)}
+  .tab:hover{color:var(--txt)}
+  /* scanner */
+  .scanbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+  .scanbar .sum{color:var(--muted);font-size:12.5px}
+  .scanbar .sum b{color:var(--txt)}
+  table.scan{width:100%;border-collapse:collapse;font-size:12.5px}
+  table.scan th,table.scan td{padding:8px 10px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}
+  table.scan th{position:sticky;top:0;background:var(--panel);color:var(--muted);font-size:10.5px;
+    letter-spacing:.5px;text-transform:uppercase;z-index:5}
+  table.scan td.l,table.scan th.l{text-align:left}
+  table.scan tbody tr{cursor:pointer}
+  table.scan tbody tr:hover{background:rgba(56,189,248,.06)}
+  .rank{color:var(--dim);font-weight:700}
+  .sideCall{color:var(--green);font-weight:800}
+  .sidePut{color:var(--red);font-weight:800}
+  .gain{font-weight:800;color:var(--teal)}
+  .tk{font-weight:800;letter-spacing:.3px}
+  .edgeUp{color:var(--green)} .edgeDn{color:var(--red)}
+  .skips{color:var(--dim);font-size:11px;margin-top:12px;line-height:1.7}
+  .scanopt{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:inline-flex;gap:6px;align-items:center;cursor:pointer}
+  .reach{font-size:9.5px;font-weight:800;letter-spacing:.4px;padding:2px 7px;border-radius:6px}
+  .reach.mean{background:rgba(52,211,153,.16);color:var(--green)}
+  .reach.max{background:rgba(251,191,36,.16);color:var(--amber)}
+  .reach.out{background:rgba(248,113,113,.16);color:var(--red)}
+  .reach.na{background:rgba(126,138,163,.16);color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><b>NET DEALER</b> <span class="c">"C"</span> TARGET</div>
+  <span id="modeBadge" class="badge mock">mock</span>
+  <div class="spacer"></div>
+  <div class="ctl">
+    <label>Ticker</label>
+    <input id="tickerInput" class="tick mono" list="tickerList" placeholder="e.g. MU" autocomplete="off" />
+    <datalist id="tickerList"></datalist>
+  </div>
+  <div class="ctl">
+    <label>Expiry</label>
+    <select id="expirySel"><option value="">—</option></select>
+  </div>
+  <button id="goBtn" class="go">Calculate C</button>
+  <div class="gear" id="gear" title="API endpoint">⚙</div>
+</header>
+
+<main>
+  <div class="tabs">
+    <button class="tab active" id="tabCalc" data-view="calc">🎯 Calculator</button>
+    <button class="tab" id="tabScan" data-view="scan">📡 Opportunity Scanner</button>
+  </div>
+  <div id="msg"></div>
+
+  <div id="calcView">
+  <div class="hero">
+    <div class="cbox">
+      <div class="lab">🎯 Net Dealer "C" · DIR centerpoint</div>
+      <div class="price mono" id="cPrice">—</div>
+      <div class="sub" id="cSub">Select a ticker &amp; expiry, then Calculate.</div>
+      <div class="sub" id="cSignals" style="margin-top:9px;font-size:12px"></div>
+      <div class="sub" id="cNote" style="margin-top:6px;font-size:10.5px;color:var(--dim)"></div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="k">Spot</div><div class="v mono" id="sSpot">—</div><div class="d" id="sSpotD"></div></div>
+      <div class="stat"><div class="k">Max Pain</div><div class="v mono" id="sPain">—</div><div class="d">min payout strike</div></div>
+      <div class="stat"><div class="k">Days to Exp</div><div class="v mono" id="sDte">—</div><div class="d" id="sDteD"></div></div>
+      <div class="stat"><div class="k">Call Wall ▲</div><div class="v mono up" id="sCw">—</div><div class="d">dealers short above → pull ↓</div></div>
+      <div class="stat"><div class="k">Put Wall ▼</div><div class="v mono dn" id="sPw">—</div><div class="d">dealers long below → pull ↑</div></div>
+      <div class="stat"><div class="k">Long / Short Avg</div><div class="v mono" id="sAvg" style="font-size:17px">—</div><div class="d">call-OI / put-OI centroid</div></div>
+    </div>
+  </div>
+
+  <div class="panel" id="picksPanel" style="display:none">
+    <h3>Best Option Picks <span id="picksSide"></span></h3>
+    <p class="hint" id="picksHint">Contracts that profit most if price pins to the C target by expiry — ranked by projected %-gain (full intrinsic value at C), liquidity-filtered. <b>Not financial advice.</b></p>
+    <div class="tblwrap" style="max-height:none">
+      <table class="scan">
+        <thead><tr>
+          <th class="l">#</th><th>Trade</th><th>Strike</th><th>Premium</th>
+          <th>Est. gain</th><th>Breakeven</th><th>Intrinsic @ C</th><th>OI</th><th>Vol</th>
+        </tr></thead>
+        <tbody id="picksBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>Net Dealer Directional Profile</h3>
+    <p class="hint">netDIR(P) = net delta of the open-interest book at price P, normalised by total OI.
+      Positive (red) = book net-long upside → dealers net-short → downward pull.
+      Negative (green) = dealers net-long → upward pull. <b>"C" is where the curve crosses zero.</b></p>
+    <div class="profilewrap">
+      <svg class="profile" id="profile" preserveAspectRatio="none"></svg>
+      <div class="charttip" id="profileTip"></div>
+    </div>
+    <div class="legend">
+      <span><span class="sw" style="background:var(--pink)"></span>C target (netDIR = 0)</span>
+      <span><span class="sw" style="background:var(--blue)"></span>Spot</span>
+      <span><span class="sw" style="background:var(--red)"></span>netDIR &gt; 0 (dealer-short)</span>
+      <span><span class="sw" style="background:var(--green)"></span>netDIR &lt; 0 (dealer-long)</span>
+      <span><span class="sw" style="background:var(--amber)"></span>±1σ / ±2σ IV expected move</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>Option Chain — dealer inventory by strike</h3>
+    <p class="hint">Calls (left) · Strike · netDIR at that strike · Puts (right). The
+      <span style="color:var(--pink)">C row</span> is highlighted; Call/Put walls are outlined.
+      <span style="color:#7aa2f7">OI = known inventory</span> · <span style="color:#e8a33d">Volume = live/dynamic inventory</span>
+      (netDIR &amp; C blend both).</p>
+    <div class="tblwrap">
+      <table>
+        <thead><tr>
+          <th class="callHdr">OI</th><th class="callHdr">Vol</th><th class="callHdr">IV</th><th class="callHdr">Ask</th>
+          <th class="strikeCol">Strike</th>
+          <th style="text-align:center">netDIR</th>
+          <th class="putHdr">Ask</th><th class="putHdr">IV</th><th class="putHdr">Vol</th><th class="putHdr">OI</th>
+        </tr></thead>
+        <tbody id="chainBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="foot" id="foot"></div>
+  </div><!-- /calcView -->
+
+  <div id="scanView" style="display:none">
+    <div class="scanbar">
+      <button id="scanBtn" class="go">Run scan</button>
+      <label class="scanopt" title="Which weekly expiry to scan">
+        Expiry
+        <select id="scanWeeks" style="padding:5px 8px">
+          <option value="this">This week</option>
+          <option value="next">Next week</option>
+          <option value="both">Both weeks</option>
+        </select>
+      </label>
+      <label class="scanopt" title="Only show tickers whose move to C is within their proven ~30-day range (Biggjuann/Range)">
+        <input type="checkbox" id="scanRange" checked style="accent-color:var(--teal)"/> 30d range filter
+      </label>
+      <label class="scanopt"><input type="checkbox" id="scanRefresh" style="accent-color:var(--teal)"/> force refresh</label>
+      <div class="sum" id="scanSum">Scans a curated set of ~50 liquid names, ranked by projected option %-gain if price pins to the C target by the nearest weekly — filtered to moves within each ticker's proven 30-day range.</div>
+    </div>
+    <div class="tblwrap">
+      <table class="scan">
+        <thead><tr>
+          <th class="l">#</th><th class="l">Ticker</th><th>Spot</th><th>C target</th><th>Edge %</th>
+          <th>Trade</th><th>Strike</th><th>Exp</th><th>Premium</th><th>Est. gain</th><th>Setup</th><th>Breakeven</th><th>OI</th>
+          <th>30d ADR / Max</th><th>Reach</th><th>IV σ</th>
+        </tr></thead>
+        <tbody id="scanBody"></tbody>
+      </table>
+    </div>
+    <div class="skips" id="scanSkips"></div>
+    <p class="hint" style="margin-top:14px">Ranked by <b>reward × Setup confidence</b> (0–100): direction agreement (does the
+      dealer <b>crush</b> direction match C?), crush fuel (OTM premium at stake), how sharp the netDIR pin is, 30d reachability, and
+      liquidity. <b>Trade</b> shows a ✓ when the crush direction confirms C. Est. gain assumes a full pin to C by expiry — an idealized
+      projection, not a guarantee. Click any row to open it in the Calculator. <b>Not financial advice.</b></p>
+  </div><!-- /scanView -->
+</main>
+
+<div class="modal" id="modal">
+  <div class="card">
+    <h4>API endpoint</h4>
+    <p>Where the calculator fetches data. Leave blank to use this page's own origin
+      (when the page is served by the backend). For a GitHub Pages front-end, set this
+      to your deployed backend URL, e.g. <span class="mono">https://your-app.up.railway.app</span>.</p>
+    <input id="apiInput" class="mono" placeholder="https://your-backend-url" />
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="gear" id="apiCancel">Cancel</button>
+      <button class="go" id="apiSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const API_KEY = "netdealer_api_base";
+function apiBase(){ return localStorage.getItem(API_KEY) || ""; }
+function api(path){ return (apiBase() ? apiBase().replace(/\/$/,"") : "") + path; }
+const fmt = (x,d=2) => (x===null||x===undefined||isNaN(x)) ? "—" : Number(x).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
+const fmtInt = x => (x===null||x===undefined||isNaN(x)) ? "—" : Number(x).toLocaleString();
+const pct = x => (x===null||x===undefined||isNaN(x)) ? "—" : (x*100).toFixed(1)+"%";
+
+let LAST = null;
+let PROFILE = null;
+
+async function loadConfig(){
+  try{
+    const r = await fetch(api("/api/config")); const c = await r.json();
+    const list = $("tickerList"); list.innerHTML = "";
+    const tickers = c.tickers || [];
+    tickers.forEach(t => { const o=document.createElement("option"); o.value=t; list.appendChild(o); });
+    const badge = $("modeBadge");
+    badge.textContent = c.mode; badge.className = "badge " + (c.mode==="live"?"live":"mock");
+    badge.title = tickers.length + " tickers available (type to search; any symbol allowed)";
+    // Seed a sensible default ticker so the page has something to show.
+    if(!$("tickerInput").value){
+      $("tickerInput").value = tickers.includes("MU") ? "MU" : (tickers[0] || "");
+    }
+    if(c.mode==="live" && !c.token_configured){ msg("Live mode but no shared token configured — chain calls will fail until SCHWAB_TOKEN_SHARE_KEY is set on the backend."); }
+  }catch(e){ msg("Could not reach the API at "+(apiBase()||"this origin")+". Set the API endpoint with ⚙."); }
+}
+
+async function loadExpiries(){
+  const t = currentTicker(); if(!t) return;
+  const esel = $("expirySel"); esel.innerHTML = '<option value="">loading…</option>';
+  try{
+    const r = await fetch(api("/api/expiries?ticker="+encodeURIComponent(t)));
+    const j = await r.json();
+    esel.innerHTML = "";
+    if(!(j.expiries||[]).length){ esel.innerHTML='<option value="">none</option>'; return; }
+    j.expiries.forEach(e => { const o=document.createElement("option"); o.value=e; o.textContent=e; esel.appendChild(o); });
+  }catch(e){ esel.innerHTML='<option value="">error</option>'; msg("Failed to load expiries: "+e); }
+}
+
+function currentTicker(){
+  return $("tickerInput").value.trim().toUpperCase();
+}
+
+async function calculate(){
+  const t = currentTicker(); const e = $("expirySel").value;
+  if(!t){ msg("Pick or type a ticker."); return; }
+  if(!e){ msg("Pick an expiry."); return; }
+  msg(""); $("goBtn").disabled = true; document.querySelector("main").classList.add("loading");
+  try{
+    const r = await fetch(api("/api/net-dealer?ticker="+encodeURIComponent(t)+"&expiry="+encodeURIComponent(e)));
+    const d = await r.json();
+    if(d.error){ msg(d.error); return; }
+    LAST = d; render(d);
+  }catch(err){ msg("Calculation failed: "+err); }
+  finally{ $("goBtn").disabled=false; document.querySelector("main").classList.remove("loading"); }
+}
+
+function render(d){
+  const spot = d.spot, c = d.c_target;
+  $("cPrice").textContent = c===null ? "—" : fmt(c);
+  if(c!==null){
+    const dist = spot ? (c-spot) : null;
+    const dir = dist===null ? "" : (dist>=0 ? "▲ dealers pulling up "+fmt(Math.abs(dist))+" from spot"
+                                             : "▼ dealers pulling down "+fmt(Math.abs(dist))+" from spot");
+    $("cSub").innerHTML = `<b>${d.ticker}</b> · exp <b>${d.expiry}</b> · netDIR at C ≈ <b>${pct(d.c_netdir)}</b><br>${dir}`;
+  } else { $("cSub").textContent = d.note || "Not enough open interest to solve for C."; }
+
+  $("sSpot").textContent = fmt(spot);
+  $("sSpotD").textContent = d.mode==="mock" ? "synthetic" : "live";
+  $("sPain").textContent = fmt(d.max_pain);
+  $("sDte").textContent = fmt(d.dte,1);
+  $("sDteD").textContent = d.expiry;
+  $("sCw").textContent = fmt(d.call_wall);
+  $("sPw").textContent = fmt(d.put_wall);
+  $("sAvg").textContent = fmt(d.long_avg,0)+" / "+fmt(d.short_avg,0);
+
+  $("foot").innerHTML = `Total call OI ${fmtInt(d.total_call_oi)} · total put OI ${fmtInt(d.total_put_oi)} · `
+    + `${d.mode.toUpperCase()} data · model: net-delta zero-crossing (Black-Scholes deltas over open interest).`;
+
+  renderSignals(d);
+  renderPicks(d);
+  drawProfile(d);
+  drawChain(d);
+}
+
+function renderSignals(d){
+  const el=$("cSignals");
+  if(d.c_target==null){ el.innerHTML=""; return; }
+  const parts=[];
+  if(d.crush_direction){
+    const col = d.crush_direction==="DOWN" ? "var(--red)" : "var(--green)";
+    parts.push(`<span style="color:${col};font-weight:700">Crush ${d.crush_direction}</span> `
+      + `<span style="color:var(--muted)">(${d.expensive_side||"?"}s expensive)</span>`);
+  }
+  if(d.sweet_spot_low!=null)
+    parts.push(`Sweet spot <b>${fmt(d.sweet_spot_low)}–${fmt(d.sweet_spot_high)}</b>`);
+  if(d.confidence!=null){
+    const cls = d.confidence>=70?"mean":(d.confidence>=45?"max":"out");
+    parts.push(`Setup <span class="reach ${cls}">${Math.round(d.confidence)}/100</span>`);
+  }
+  if(d.range_conf) parts.push(`Reach ${reachBadge(d.range_conf)}`);
+  if(d.expected_move!=null){
+    const ivcls = d.iv_reach==="within-1sig"?"mean":(d.iv_reach==="within-2sig"?"max":"out");
+    parts.push(`Exp move <b>±$${fmt(d.expected_move)}</b> (${(d.expected_move_pct*100).toFixed(1)}%, 1σ)`
+      + ` · C <span class="reach ${ivcls}" title="move to C in IV expected-move σ">${d.c_sigma}σ</span>`);
+  }
+  if(d.volume_bias){
+    const vcol = d.volume_bias==="DOWN" ? "var(--red)" : "var(--green)";
+    const vtag = d.volume_agree===false
+      ? ` <span style="color:var(--amber)" title="live volume is entering against the crush thesis — landscape shifting">⚠ vs crush</span>`
+      : (d.volume_agree===true ? ` <span style="color:var(--green)">✓</span>` : "");
+    parts.push(`Vol skew <span style="color:${vcol};font-weight:700">${d.volume_bias}</span>${vtag}`);
+  }
+  if(d.direction_agree===false)
+    parts.push(`<span style="color:var(--amber)" title="crush direction conflicts with C">⚠ mixed direction</span>`);
+  el.innerHTML = parts.join(" &nbsp;·&nbsp; ");
+  $("cNote").innerHTML = "C is the <b>centerpoint of the Dealer Inventory Risk range</b> — a directional bias, "
+    + "not an exact target. netDIR &amp; C blend Open Interest (known) with live Volume (dynamic).";
+}
+
+function renderPicks(d){
+  const panel=$("picksPanel"), body=$("picksBody"); body.innerHTML="";
+  panel.style.display="";
+  const side=d.pick_side, picks=d.picks||[];
+  $("picksSide").innerHTML = side
+    ? `<span class="${side==='CALL'?'sideCall':'sidePut'}" style="font-size:12px">— buy ${side}S toward C</span>` : "";
+  $("picksHint").innerHTML = `Contracts that profit most if <b>${d.ticker}</b> pins to `
+    + `C = <b>${fmt(d.c_target)}</b> by <b>${d.expiry}</b> — ranked by projected %-gain `
+    + `(full intrinsic at C), liquidity-filtered. <b>Not financial advice.</b>`;
+  if(!picks.length){
+    body.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--dim);padding:16px">`
+      + `No positive-gain contracts at this expiry — C (${fmt(d.c_target)}) sits too close to spot `
+      + `(${fmt(d.spot)}) or the strikes toward C are too thin. Try a nearer/further expiry.</td></tr>`;
+    return;
+  }
+  const sideCls = side==="CALL" ? "sideCall" : "sidePut";
+  picks.forEach((p,i)=>{
+    const tr=document.createElement("tr");
+    tr.title="Highlight strike "+p.strike+" in the chain below";
+    tr.innerHTML =
+      `<td class="l rank">${i+1}</td>`+
+      `<td class="${sideCls}">${p.side}</td>`+
+      `<td>${fmt(p.strike, p.strike>=100?0:1)}</td>`+
+      `<td>$${fmt(p.premium)}</td>`+
+      `<td class="gain">+${(p.est_gain_pct*100).toFixed(0)}%</td>`+
+      `<td>${fmt(p.breakeven)}</td>`+
+      `<td style="color:var(--muted)">$${fmt(p.intrinsic_at_c)}</td>`+
+      `<td style="color:var(--dim)">${fmtInt(p.contract_oi)}</td>`+
+      `<td style="color:var(--dim)">${fmtInt(p.contract_volume)}</td>`;
+    tr.addEventListener("click",()=>highlightStrike(p.strike));
+    body.appendChild(tr);
+  });
+}
+
+function highlightStrike(strike){
+  // find the chain row whose center strike cell matches and flash it
+  const cells=document.querySelectorAll("#chainBody .strikeCol");
+  for(const c of cells){
+    const val=parseFloat(c.textContent.replace(/,/g,""));
+    if(Math.abs(val-strike)<0.001){
+      const tr=c.closest("tr");
+      tr.scrollIntoView({behavior:"smooth",block:"center"});
+      tr.style.transition="background .2s"; const old=tr.style.background;
+      tr.style.background="rgba(34,211,183,.28)";
+      setTimeout(()=>{tr.style.background=old;},1100);
+      break;
+    }
+  }
+}
+
+function drawProfile(d){
+  const svg = $("profile"); svg.innerHTML = "";
+  const rows = d.rows||[]; if(!rows.length) return;
+  const W=1000, H=230, padL=44, padR=12, padT=14, padB=24;
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  const strikes = rows.map(r=>r.strike);
+  const minK=Math.min(...strikes), maxK=Math.max(...strikes);
+  const nd = rows.map(r=>r.netdir);
+  const maxAbs = Math.max(0.05, ...nd.map(v=>Math.abs(v)));
+  const x = k => padL + (k-minK)/(maxK-minK||1)*(W-padL-padR);
+  const y = v => padT + (1-(v+maxAbs)/(2*maxAbs))*(H-padT-padB);
+  const NS="http://www.w3.org/2000/svg";
+  const line=(x1,y1,x2,y2,stroke,w,dash)=>{const l=document.createElementNS(NS,"line");
+    l.setAttribute("x1",x1);l.setAttribute("y1",y1);l.setAttribute("x2",x2);l.setAttribute("y2",y2);
+    l.setAttribute("stroke",stroke);l.setAttribute("stroke-width",w||1);if(dash)l.setAttribute("stroke-dasharray",dash);svg.appendChild(l);};
+  const text=(tx,ty,s,fill,anchor,size)=>{const t=document.createElementNS(NS,"text");
+    t.setAttribute("x",tx);t.setAttribute("y",ty);t.setAttribute("fill",fill||"#7e8aa3");
+    t.setAttribute("font-size",size||11);t.setAttribute("text-anchor",anchor||"middle");
+    t.setAttribute("font-family","ui-monospace,monospace");t.textContent=s;svg.appendChild(t);};
+  // zero line
+  const yz=y(0);
+  line(padL,yz,W-padR,yz,"#56627d",1,"4 4"); text(padL-6,yz+3,"0%","#56627d","end");
+  text(padL-6,y(maxAbs)+3,"+"+(maxAbs*100).toFixed(0),"#f87171","end");
+  text(padL-6,y(-maxAbs)+3,"-"+(maxAbs*100).toFixed(0),"#34d399","end");
+  // area-ish poly for netdir
+  let dPath="";
+  rows.forEach((r,i)=>{ dPath += (i?"L":"M")+x(r.strike).toFixed(1)+" "+y(r.netdir).toFixed(1)+" "; });
+  const path=document.createElementNS(NS,"path");
+  path.setAttribute("d",dPath);path.setAttribute("fill","none");
+  path.setAttribute("stroke","#a78bfa");path.setAttribute("stroke-width",2);svg.appendChild(path);
+  // colored dots at each strike
+  rows.forEach(r=>{const cdot=document.createElementNS(NS,"circle");
+    cdot.setAttribute("cx",x(r.strike));cdot.setAttribute("cy",y(r.netdir));cdot.setAttribute("r",2);
+    cdot.setAttribute("fill", r.netdir>=0 ? "#f87171":"#34d399");svg.appendChild(cdot);});
+  // IV expected-move bands (±1σ amber, ±2σ faint) — the forward-looking range.
+  // Only a small σ tag is drawn; the exact price shows on hover, not statically.
+  [["em_low_2","em_high_2","#8a94ab","2σ"],["em_low","em_high","#fbbf24","1σ"]].forEach(b=>{
+    [[d[b[0]],"−"+b[3],"start",4],[d[b[1]],"+"+b[3],"end",-4]].forEach(p=>{
+      const px=p[0];
+      if(px!=null && px>=minK && px<=maxK){
+        line(x(px),padT+12,x(px),H-padB,b[2],1,"3 3");
+        text(x(px)+p[3], padT+9, p[1], b[2], p[2], 9.5);
+      }
+    });
+  });
+  // spot marker
+  if(d.spot!==null && d.spot>=minK && d.spot<=maxK){
+    line(x(d.spot),padT,x(d.spot),H-padB,"#38bdf8",1.5,"3 3");
+    text(x(d.spot),H-8,"spot "+d.spot.toFixed(0),"#38bdf8","middle",10);
+  }
+  // C marker
+  if(d.c_target!==null && d.c_target>=minK && d.c_target<=maxK){
+    line(x(d.c_target),padT,x(d.c_target),H-padB,"#ec4899",2);
+    const dot=document.createElementNS(NS,"circle");
+    dot.setAttribute("cx",x(d.c_target));dot.setAttribute("cy",yz);dot.setAttribute("r",4.5);
+    dot.setAttribute("fill","#ec4899");svg.appendChild(dot);
+    text(x(d.c_target),padT+2,"C "+d.c_target.toFixed(2),"#ec4899","middle",11);
+  }
+  // x labels (edges only — the center is left for the spot marker label)
+  text(padL,H-8,minK.toFixed(0),"#56627d","start",10);
+  text(W-padR,H-8,maxK.toFixed(0),"#56627d","end",10);
+  // crosshair line (moved on hover)
+  const xh=document.createElementNS(NS,"line");
+  xh.setAttribute("id","xhair"); xh.setAttribute("y1",padT); xh.setAttribute("y2",H-padB);
+  xh.setAttribute("stroke","#e6edf7"); xh.setAttribute("stroke-width",1);
+  xh.setAttribute("stroke-dasharray","2 2"); xh.setAttribute("opacity",0); svg.appendChild(xh);
+  // stash the scale + series so the hover handler can read them
+  PROFILE={minK,maxK,padL,padR,W,H,padT,padB,x,
+    rows:rows.map(r=>({strike:r.strike,netdir:r.netdir})),
+    spot:d.spot,c:d.c_target,
+    em_low:d.em_low,em_high:d.em_high,em_low_2:d.em_low_2,em_high_2:d.em_high_2};
+}
+
+function netdirAt(price){
+  const rs=PROFILE.rows; if(!rs||!rs.length) return null;
+  if(price<=rs[0].strike) return rs[0].netdir;
+  if(price>=rs[rs.length-1].strike) return rs[rs.length-1].netdir;
+  for(let i=1;i<rs.length;i++){
+    if(price<=rs[i].strike){
+      const a=rs[i-1],b=rs[i],t=(price-a.strike)/((b.strike-a.strike)||1);
+      return a.netdir+(b.netdir-a.netdir)*t;
+    }
+  }
+  return null;
+}
+function setupProfileHover(){
+  const svg=$("profile"), tip=$("profileTip");
+  svg.addEventListener("mousemove",e=>{
+    if(!PROFILE) return;
+    const rect=svg.getBoundingClientRect();
+    const {minK,maxK,padL,padR,W,padT,H,padB}=PROFILE;
+    const sx=(e.clientX-rect.left)/rect.width*W;
+    let price=minK+(sx-padL)/((W-padL-padR)||1)*(maxK-minK);
+    price=Math.max(minK,Math.min(maxK,price));
+    const nd=netdirAt(price);
+    const xh=document.getElementById("xhair");
+    if(xh){ const cx=PROFILE.x(price); xh.setAttribute("x1",cx); xh.setAttribute("x2",cx); xh.setAttribute("opacity",.55); }
+    const lvls=[["spot",PROFILE.spot],["C",PROFILE.c],["+1σ",PROFILE.em_high],["−1σ",PROFILE.em_low],
+                ["+2σ",PROFILE.em_high_2],["−2σ",PROFILE.em_low_2]];
+    const tol=(maxK-minK)*0.012; let tag="";
+    for(const [n,v] of lvls){ if(v!=null && Math.abs(price-v)<tol){ tag=n; break; } }
+    const ndCol = nd>=0 ? "var(--red)" : "var(--green)";
+    let html=`<div><span class="k">Price</span> <b>${price.toFixed(2)}</b></div>`
+      +`<div><span class="k">netDIR</span> <b style="color:${ndCol}">${nd!=null?(nd*100).toFixed(1)+"%":"—"}</b></div>`;
+    if(PROFILE.spot!=null){
+      const ds=price-PROFILE.spot;
+      html+=`<div><span class="k">vs spot</span> ${ds>=0?"+":""}${ds.toFixed(2)}`
+        + (PROFILE.c!=null?` &nbsp;<span class="k">vs C</span> ${(price-PROFILE.c>=0?"+":"")}${(price-PROFILE.c).toFixed(2)}`:"")+`</div>`;
+    }
+    if(tag) html+=`<div style="color:var(--amber)">≈ ${tag}</div>`;
+    tip.innerHTML=html; tip.style.display="block";
+    let left=(e.clientX-rect.left)+14, top=(e.clientY-rect.top)+12;
+    if(left+tip.offsetWidth>rect.width) left=(e.clientX-rect.left)-tip.offsetWidth-14;
+    tip.style.left=Math.max(0,left)+"px"; tip.style.top=top+"px";
+  });
+  svg.addEventListener("mouseleave",()=>{
+    tip.style.display="none";
+    const xh=document.getElementById("xhair"); if(xh) xh.setAttribute("opacity",0);
+  });
+}
+
+function drawChain(d){
+  const body=$("chainBody"); body.innerHTML="";
+  const rows=d.rows||[]; if(!rows.length) return;
+  const maxAbs=Math.max(0.05,...rows.map(r=>Math.abs(r.netdir)));
+  // find the strike closest to C to mark the C row
+  let cIdx=-1, best=1e9;
+  if(d.c_target!==null) rows.forEach((r,i)=>{const dd=Math.abs(r.strike-d.c_target); if(dd<best){best=dd;cIdx=i;}});
+  rows.slice().reverse().forEach((r)=>{
+    const i=rows.indexOf(r);
+    const tr=document.createElement("tr");
+    if(i===cIdx) tr.className="crow";
+    const isCw = r.strike===d.call_wall, isPw = r.strike===d.put_wall, isSpot = d.spot!==null && Math.abs(r.strike-d.spot)<1e-6;
+    const w = Math.min(50, Math.abs(r.netdir)/maxAbs*50);
+    const bar = `<div class="ndbar"><div class="mid"></div>`+
+      (r.netdir>=0
+        ? `<div class="fill pos" style="left:50%;width:${w}%"></div>`
+        : `<div class="fill neg" style="right:50%;width:${w}%"></div>`)+`</div>`;
+    let tags="";
+    if(i===cIdx) tags+=`<span class="tag c">C</span>`;
+    if(isCw) tags+=`<span class="tag cw">CW</span>`;
+    if(isPw) tags+=`<span class="tag pw">PW</span>`;
+    if(isSpot) tags+=`<span class="tag sp">SPOT</span>`;
+    tr.innerHTML =
+      `<td class="oi">${fmtInt(r.call_oi)}</td><td class="vol">${fmtInt(r.call_volume)}</td>`+
+      `<td>${r.call_iv!==null?(r.call_iv*100).toFixed(1):"—"}</td><td>${fmt(r.call_ask)}</td>`+
+      `<td class="strikeCol ${isCw?'wallCall':''} ${isPw?'wallPut':''}">${fmt(r.strike,r.strike>=100?0:1)}${tags}</td>`+
+      `<td class="ndcell">${bar}<div style="font-size:9px;color:var(--dim);text-align:center">${pct(r.netdir)}</div></td>`+
+      `<td>${fmt(r.put_ask)}</td><td>${r.put_iv!==null?(r.put_iv*100).toFixed(1):"—"}</td>`+
+      `<td class="vol">${fmtInt(r.put_volume)}</td><td class="oi">${fmtInt(r.put_oi)}</td>`;
+    body.appendChild(tr);
+  });
+}
+
+function msg(s){ $("msg").textContent = s||""; }
+
+// ---- scanner ----
+let SCANNED = false;
+function showView(v){
+  $("calcView").style.display = v==="calc" ? "" : "none";
+  $("scanView").style.display = v==="scan" ? "" : "none";
+  $("tabCalc").classList.toggle("active", v==="calc");
+  $("tabScan").classList.toggle("active", v==="scan");
+  if(v==="scan" && !SCANNED) runScan();
+}
+async function runScan(){
+  const btn=$("scanBtn"); btn.disabled=true; const prev=btn.textContent; btn.textContent="Scanning…";
+  $("scanSum").textContent="Scanning the liquid universe…"; msg("");
+  try{
+    const qs = "?weeks="+$("scanWeeks").value
+      + "&range_filter="+($("scanRange").checked?"true":"false")
+      + ($("scanRefresh").checked ? "&refresh=true" : "");
+    const r = await fetch(api("/api/scan"+qs)); const d = await r.json();
+    if(d.error){ msg(d.error); return; }
+    SCANNED = true; renderScan(d);
+  }catch(e){ msg("Scan failed: "+e); }
+  finally{ btn.disabled=false; btn.textContent=prev; }
+}
+function reachBadge(conf){
+  if(conf==="within-mean") return `<span class="reach mean" title="move to C is within the 30d MEAN daily range">MEAN</span>`;
+  if(conf==="within-max")  return `<span class="reach max" title="within the 30d MAX (widest) daily range, above the mean">MAX</span>`;
+  if(conf==="out-of-range")return `<span class="reach out" title="move to C exceeds the ticker's proven 30d range">OUT</span>`;
+  return `<span class="reach na" title="range data unavailable">n/a</span>`;
+}
+function confBadge(v){
+  if(v==null) return `<span class="reach na">—</span>`;
+  const cls = v>=70?"mean":(v>=45?"max":"out");
+  return `<span class="reach ${cls}" title="setup confidence 0-100 (direction agreement, crush fuel, pin steepness, 30d + IV reachability, liquidity)">${Math.round(v)}</span>`;
+}
+function ivBadge(r){
+  if(r.c_sigma==null) return `<span class="reach na">—</span>`;
+  const cls = r.iv_reach==="within-1sig"?"mean":(r.iv_reach==="within-2sig"?"max":"out");
+  const em = r.expected_move_pct!=null ? ` — 1σ move ${(r.expected_move_pct*100).toFixed(1)}%` : "";
+  return `<span class="reach ${cls}" title="move to C is ${r.c_sigma}σ of the IV expected move${em}">${r.c_sigma}σ</span>`;
+}
+function renderScan(d){
+  const cacheTxt = d.cached ? ` · cached ${d.age_seconds}s ago` : ` · ${d.elapsed_seconds}s`;
+  const filtTxt = d.range_filter
+    ? ` · <span style="color:var(--amber)">${d.range_filtered_out} out-of-range filtered</span>`
+    : ` · <span style="color:var(--muted)">range filter off</span>`;
+  const multiWk = (d.weeks||[0]).length > 1;
+  const scope = multiWk
+    ? `Scanned <b>${d.scanned}</b> tickers × ${d.weeks.length} weeks (<b>${d.evaluations}</b> expiries)`
+    : `Scanned <b>${d.scanned}</b>`;
+  $("scanSum").innerHTML = scope + ` · <b>${d.opportunities}</b> opportunities`
+    + filtTxt + ` · <span style="color:var(--muted)">${d.mode.toUpperCase()}${cacheTxt}</span>`;
+  const body=$("scanBody"); body.innerHTML="";
+  (d.results||[]).forEach((r,i)=>{
+    const tr=document.createElement("tr");
+    tr.title="Open "+r.ticker+" in the Calculator";
+    const sideCls = r.direction==="CALL" ? "sideCall" : "sidePut";
+    const edgeCls = r.edge_pct>=0 ? "edgeUp" : "edgeDn";
+    const edgeArrow = r.edge_pct>=0 ? "▲" : "▼";
+    const adr = r.adr_percent!=null ? r.adr_percent.toFixed(1)+"%" : "—";
+    const mx  = r.max_range_percent!=null ? r.max_range_percent.toFixed(1)+"%" : "—";
+    const agreeMark = r.direction_agree===true
+      ? ` <span style="color:var(--green)" title="crush direction agrees with C">✓</span>`
+      : r.direction_agree===false
+      ? ` <span style="color:var(--red)" title="crush direction conflicts with C — weaker setup">⚠</span>` : "";
+    const volMark = r.volume_agree===false
+      ? ` <span style="color:var(--amber)" title="live volume skewing ${r.volume_bias} — against the crush thesis">⚡</span>` : "";
+    const crushTitle = r.expensive_side
+      ? `${r.expensive_side}s expensive → crush ${r.crush_direction}`
+        + (r.volume_bias?` · volume skew ${r.volume_bias}${r.volume_agree===false?" (conflicts)":" (confirms)"}`:"") : "";
+    const zoneTitle = r.sweet_spot_low!=null ? `sweet spot ${fmt(r.sweet_spot_low)}–${fmt(r.sweet_spot_high)}` : "";
+    tr.innerHTML =
+      `<td class="l rank">${i+1}</td>`+
+      `<td class="l tk">${r.ticker}</td>`+
+      `<td>${fmt(r.spot)}</td>`+
+      `<td title="${zoneTitle}">${fmt(r.c_target)}</td>`+
+      `<td class="${edgeCls}">${edgeArrow} ${(Math.abs(r.edge_pct)*100).toFixed(2)}%</td>`+
+      `<td class="${sideCls}" title="${crushTitle}">${r.direction}${agreeMark}${volMark}</td>`+
+      `<td>${fmt(r.strike, r.strike>=100?0:1)}</td>`+
+      `<td style="color:var(--muted)">${r.expiry||"—"}${multiWk?` <span class="reach na" style="padding:1px 5px">W${(r.week_index||0)+1}</span>`:""}</td>`+
+      `<td>$${fmt(r.premium)}</td>`+
+      `<td class="gain">+${(r.est_gain_pct*100).toFixed(0)}%</td>`+
+      `<td>${confBadge(r.confidence)}</td>`+
+      `<td>${fmt(r.breakeven)}</td>`+
+      `<td style="color:var(--dim)">${fmtInt(r.contract_oi)}</td>`+
+      `<td style="color:var(--muted)">${adr} / ${mx}</td>`+
+      `<td>${reachBadge(r.range_conf)}</td>`+
+      `<td>${ivBadge(r)}</td>`;
+    tr.addEventListener("click",()=>openInCalc(r));
+    body.appendChild(tr);
+  });
+  const sk = d.skipped||[];
+  $("scanSkips").textContent = sk.length
+    ? "Skipped ("+sk.length+"): "+sk.map(s=>s.ticker+" ("+s.reason+")").join(", ")
+    : "";
+}
+async function openInCalc(r){
+  showView("calc");
+  $("tickerInput").value = r.ticker; _lastTicker = r.ticker;
+  await loadExpiries();
+  if(r.expiry){
+    const esel=$("expirySel");
+    if(![...esel.options].some(o=>o.value===r.expiry)){
+      const o=document.createElement("option"); o.value=r.expiry; o.textContent=r.expiry; esel.appendChild(o);
+    }
+    esel.value=r.expiry;
+  }
+  calculate();
+}
+
+// ---- events ----
+let _lastTicker="";
+function onTickerChange(){ const t=currentTicker(); if(t && t!==_lastTicker){ _lastTicker=t; loadExpiries(); } }
+$("tickerInput").addEventListener("change",onTickerChange);   // fires on datalist pick / blur
+$("tickerInput").addEventListener("keydown",e=>{ if(e.key==="Enter"){ onTickerChange(); } });
+$("expirySel").addEventListener("change",()=>{ if($("expirySel").value) calculate(); });
+$("tabCalc").addEventListener("click",()=>showView("calc"));
+$("tabScan").addEventListener("click",()=>showView("scan"));
+$("scanBtn").addEventListener("click",runScan);
+$("scanRange").addEventListener("change",()=>{ if(SCANNED) runScan(); });
+$("scanWeeks").addEventListener("change",()=>{ if(SCANNED) runScan(); });
+$("goBtn").addEventListener("click",calculate);
+// api endpoint modal
+$("gear").addEventListener("click",()=>{ $("apiInput").value=apiBase(); $("modal").classList.add("on"); });
+$("apiCancel").addEventListener("click",()=>$("modal").classList.remove("on"));
+$("apiSave").addEventListener("click",()=>{
+  const v=$("apiInput").value.trim();
+  if(v) localStorage.setItem(API_KEY,v); else localStorage.removeItem(API_KEY);
+  $("modal").classList.remove("on"); boot();
+});
+
+setupProfileHover();
+async function boot(){ await loadConfig(); _lastTicker = currentTicker(); await loadExpiries(); }
+boot();
+</script>
+</body>
+</html>
