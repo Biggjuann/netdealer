@@ -322,11 +322,12 @@ def run_scan(provider, tickers: Optional[List[str]] = None, use_cache: bool = Tr
     else:
         ranked = tradeable
 
-    # Rank by reward × confidence, so a slightly-smaller gain with a much
-    # stronger setup (direction agrees, high crush fuel, sharp pin, reachable)
-    # outranks a big-gain-but-shaky one. Falls back to raw gain if unscored.
-    ranked.sort(key=lambda r: (r.opportunity_score if r.opportunity_score is not None
-                               else r.est_gain_pct), reverse=True)
+    # Best setups first: rank by the Setup CONFIDENCE score (setup quality —
+    # direction agreement, crush fuel, pin sharpness, 30d + IV reachability,
+    # liquidity, volume confirmation), using projected gain only as a tiebreaker.
+    # NOT primarily by return %, so high-conviction setups outrank lottery tickets.
+    ranked.sort(key=lambda r: (r.confidence if r.confidence is not None else 0.0,
+                               r.est_gain_pct or 0.0), reverse=True)
     skipped = [r for r in results if r.skip is not None]
 
     payload = {
