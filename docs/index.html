@@ -217,7 +217,8 @@
     <p class="hint">Calls (left) · Strike · netDIR at that strike · Puts (right). The
       <span style="color:var(--pink)">C row</span> is highlighted; Call/Put walls are outlined.
       <span style="color:#7aa2f7">OI = known inventory</span> · <span style="color:#e8a33d">Volume = live/dynamic inventory</span>
-      (netDIR &amp; C blend both).</p>
+      (netDIR &amp; C blend both). <b>Bar length</b> = size vs the largest strike, so longer call-side bars = more dealer inventory
+      there (incentive to keep price below it).</p>
     <div class="tblwrap">
       <table>
         <thead><tr>
@@ -440,6 +441,15 @@ function renderPicks(d){
   });
 }
 
+// Horizontal inventory bar behind an OI/Volume cell (the Wave-style blue/orange
+// bars). Call side anchors right & grows left; put side anchors left & grows right.
+function invBar(val, max, kind, anchor){
+  const pct = max>0 ? Math.min(100, (val/max)*100) : 0;
+  const col = kind==="oi" ? "rgba(122,162,247,.48)" : "rgba(232,163,61,.44)";
+  const dir = anchor==="right" ? "to left" : "to right";
+  return `background:linear-gradient(${dir}, ${col} ${pct}%, transparent ${pct}%)`;
+}
+
 function highlightStrike(strike){
   // find the chain row whose center strike cell matches and flash it
   const cells=document.querySelectorAll("#chainBody .strikeCol");
@@ -581,6 +591,10 @@ function drawChain(d){
   const body=$("chainBody"); body.innerHTML="";
   const rows=d.rows||[]; if(!rows.length) return;
   const maxAbs=Math.max(0.05,...rows.map(r=>Math.abs(r.netdir)));
+  // scale inventory bars: OI vs its chain-wide max, Volume vs its own — so the
+  // call-vs-put imbalance is visible within each metric (like the Wave bars).
+  const maxOI=Math.max(1,...rows.map(r=>Math.max(r.call_oi,r.put_oi)));
+  const maxVol=Math.max(1,...rows.map(r=>Math.max(r.call_volume,r.put_volume)));
   // find the strike closest to C to mark the C row
   let cIdx=-1, best=1e9;
   if(d.c_target!==null) rows.forEach((r,i)=>{const dd=Math.abs(r.strike-d.c_target); if(dd<best){best=dd;cIdx=i;}});
@@ -600,12 +614,14 @@ function drawChain(d){
     if(isPw) tags+=`<span class="tag pw">PW</span>`;
     if(isSpot) tags+=`<span class="tag sp">SPOT</span>`;
     tr.innerHTML =
-      `<td class="oi">${fmtInt(r.call_oi)}</td><td class="vol">${fmtInt(r.call_volume)}</td>`+
+      `<td class="oi" style="${invBar(r.call_oi,maxOI,'oi','right')}">${fmtInt(r.call_oi)}</td>`+
+      `<td class="vol" style="${invBar(r.call_volume,maxVol,'vol','right')}">${fmtInt(r.call_volume)}</td>`+
       `<td>${r.call_iv!==null?(r.call_iv*100).toFixed(1):"—"}</td><td>${fmt(r.call_ask)}</td>`+
       `<td class="strikeCol ${isCw?'wallCall':''} ${isPw?'wallPut':''}">${fmt(r.strike,r.strike>=100?0:1)}${tags}</td>`+
       `<td class="ndcell">${bar}<div style="font-size:9px;color:var(--dim);text-align:center">${pct(r.netdir)}</div></td>`+
       `<td>${fmt(r.put_ask)}</td><td>${r.put_iv!==null?(r.put_iv*100).toFixed(1):"—"}</td>`+
-      `<td class="vol">${fmtInt(r.put_volume)}</td><td class="oi">${fmtInt(r.put_oi)}</td>`;
+      `<td class="vol" style="${invBar(r.put_volume,maxVol,'vol','left')}">${fmtInt(r.put_volume)}</td>`+
+      `<td class="oi" style="${invBar(r.put_oi,maxOI,'oi','left')}">${fmtInt(r.put_oi)}</td>`;
     body.appendChild(tr);
   });
 }
