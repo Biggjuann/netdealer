@@ -198,7 +198,8 @@ def evaluate(provider, ticker: str, week_index: int = 0) -> ScanRow:
     ty, dte = t_years(expiry)
     res = compute(ticker, expiry, rows, spot, ty, dte,
                   r=settings.risk_free_rate, fallback_iv=settings.fallback_iv,
-                  volume_weight=settings.volume_weight)
+                  volume_weight=settings.volume_weight, blend_mode=settings.blend_mode,
+                  blend_alpha=settings.blend_alpha)
     c = res.c_target
     base = ScanRow(ticker=ticker, spot=spot, c_target=c,
                    edge_pct=None, direction=None, expiry=expiry, dte=round(dte, 2),

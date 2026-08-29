@@ -52,6 +52,9 @@ def config() -> JSONResponse:
         "tickers": settings.tickers,
         "risk_free_rate": settings.risk_free_rate,
         "fallback_iv": settings.fallback_iv,
+        "blend_mode": settings.blend_mode,
+        "volume_weight": settings.volume_weight,
+        "blend_alpha": settings.blend_alpha,
         "token_configured": bool(settings.token_share_key),
     })
 
@@ -81,7 +84,8 @@ def net_dealer(ticker: str = Query(..., min_length=1),
         ticker=ticker, expiry=expiry, rows=rows, spot=spot,
         t_years=ty, dte=dte,
         r=settings.risk_free_rate, fallback_iv=settings.fallback_iv,
-        volume_weight=settings.volume_weight,
+        volume_weight=settings.volume_weight, blend_mode=settings.blend_mode,
+        blend_alpha=settings.blend_alpha,
     )
     payload = asdict(result)
     payload["mode"] = "live" if settings.live else "mock"

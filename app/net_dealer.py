@@ -249,22 +249,46 @@ def _eff_put(row: StrikeRow, w: float) -> float:
     return row.put_oi + w * row.put_volume
 
 
+def build_weights(rows: List[StrikeRow], volume_weight: float = 0.0,
+                  blend_mode: str = "additive", alpha: float = 0.5) -> List[tuple]:
+    """Per-strike (call_weight, put_weight) effective inventory, aligned to ``rows``.
+
+    * **additive**   — OI + volume_weight × Volume (raw counts). Simple, but for
+      names where Volume ≫ OI the flow can swamp the standing inventory.
+    * **normalized** — a scale-invariant blend of the OI and Volume *distributions*:
+      ``(1-α)·share_of_OI + α·share_of_Volume`` (each normalised by its own total
+      across the whole book). Volume gets an equal vote regardless of whether it
+      dwarfs or trails OI, so C behaves the same across tickers and through the
+      session. Falls back to OI-only when there is no volume yet (pre-market).
+    """
+    if blend_mode == "normalized":
+        t_oi = sum(r.call_oi + r.put_oi for r in rows)
+        t_vol = sum(r.call_volume + r.put_volume for r in rows)
+        if t_oi > 0 and t_vol > 0:
+            return [((1 - alpha) * (r.call_oi / t_oi) + alpha * (r.call_volume / t_vol),
+                     (1 - alpha) * (r.put_oi / t_oi) + alpha * (r.put_volume / t_vol))
+                    for r in rows]
+        return [(r.call_oi, r.put_oi) for r in rows]   # no volume/OI → OI-only
+    return [(_eff_call(r, volume_weight), _eff_put(r, volume_weight)) for r in rows]
+
+
 def net_delta_at(price: float, rows: List[StrikeRow], t_years: float,
                  r: float = DEFAULT_RATE, fallback_iv: float = DEFAULT_IV,
-                 volume_weight: float = 0.0) -> float:
+                 volume_weight: float = 0.0, weights: Optional[List[tuple]] = None) -> float:
     """Aggregate net dealer directional exposure at ``price``.
 
-    Weighted by **effective inventory** = OI + volume_weight × Volume, so the
-    stale once-a-day OI is adjusted by where live session volume is entering.
+    Weighted by **effective inventory** (see ``build_weights``). Pass a precomputed
+    ``weights`` list to use a specific blend; otherwise falls back to additive
+    OI + volume_weight × Volume.
 
     Positive → book is net-long upside (dealers net-short → want price down).
     Negative → book is net-long downside (dealers net-long → want price up).
     """
     T = max(t_years, _MIN_T)
+    if weights is None:
+        weights = [(_eff_call(row, volume_weight), _eff_put(row, volume_weight)) for row in rows]
     total = 0.0
-    for row in rows:
-        cw = _eff_call(row, volume_weight)
-        pw = _eff_put(row, volume_weight)
+    for row, (cw, pw) in zip(rows, weights):
         if cw:
             total += bs_call_delta(price, row.strike, T, row.call_sigma(fallback_iv), r) * cw
         if pw:
@@ -274,20 +298,23 @@ def net_delta_at(price: float, rows: List[StrikeRow], t_years: float,
 
 def netdir_pct_at(price: float, rows: List[StrikeRow], t_years: float,
                   r: float = DEFAULT_RATE, fallback_iv: float = DEFAULT_IV,
-                  volume_weight: float = 0.0) -> float:
+                  volume_weight: float = 0.0, weights: Optional[List[tuple]] = None) -> float:
     """``net_delta_at`` normalised to [-1, 1] by total effective inventory."""
-    total = sum(_eff_call(row, volume_weight) + _eff_put(row, volume_weight) for row in rows)
+    if weights is None:
+        weights = [(_eff_call(row, volume_weight), _eff_put(row, volume_weight)) for row in rows]
+    total = sum(cw + pw for cw, pw in weights)
     if total <= 0:
         return 0.0
-    return net_delta_at(price, rows, t_years, r, fallback_iv, volume_weight) / (total * 100.0)
+    return net_delta_at(price, rows, t_years, r, fallback_iv, weights=weights) / (total * 100.0)
 
 
 def find_c_target(rows: List[StrikeRow], t_years: float, r: float = DEFAULT_RATE,
                   fallback_iv: float = DEFAULT_IV, iters: int = 60,
-                  volume_weight: float = 0.0) -> Optional[float]:
+                  volume_weight: float = 0.0, weights: Optional[List[tuple]] = None) -> Optional[float]:
     """Bisect the (monotone-increasing) netDelta curve for its zero crossing."""
-    strikes = [row.strike for row in rows
-               if (_eff_call(row, volume_weight) or _eff_put(row, volume_weight))]
+    if weights is None:
+        weights = [(_eff_call(row, volume_weight), _eff_put(row, volume_weight)) for row in rows]
+    strikes = [row.strike for row, (cw, pw) in zip(rows, weights) if (cw or pw)]
     if len(strikes) < 2:
         return None
     lo, hi = min(strikes), max(strikes)
@@ -295,15 +322,15 @@ def find_c_target(rows: List[StrikeRow], t_years: float, r: float = DEFAULT_RATE
     span = hi - lo
     lo -= 0.5 * span
     hi += 0.5 * span
-    f_lo = net_delta_at(lo, rows, t_years, r, fallback_iv, volume_weight)
-    f_hi = net_delta_at(hi, rows, t_years, r, fallback_iv, volume_weight)
+    f_lo = net_delta_at(lo, rows, t_years, r, fallback_iv, weights=weights)
+    f_hi = net_delta_at(hi, rows, t_years, r, fallback_iv, weights=weights)
     if f_lo > 0:          # dealers net-short across the whole range → C at/below floor
         return round(min(strikes), 2)
     if f_hi < 0:          # dealers net-long across the whole range → C at/above cap
         return round(max(strikes), 2)
     for _ in range(iters):
         mid = 0.5 * (lo + hi)
-        if net_delta_at(mid, rows, t_years, r, fallback_iv, volume_weight) < 0:
+        if net_delta_at(mid, rows, t_years, r, fallback_iv, weights=weights) < 0:
             lo = mid
         else:
             hi = mid
@@ -328,14 +355,16 @@ def max_pain(rows: List[StrikeRow]) -> Optional[float]:
     return best_strike
 
 
-def _oi_weighted_strike(rows: List[StrikeRow], side: str,
-                        volume_weight: float = 0.0) -> Optional[float]:
+def _oi_weighted_strike(rows: List[StrikeRow], side: str, volume_weight: float = 0.0,
+                        weights: Optional[List[tuple]] = None) -> Optional[float]:
     """Effective-inventory-weighted average strike (the Long/Short-Avg centroid)."""
+    if weights is None:
+        weights = [(_eff_call(row, volume_weight), _eff_put(row, volume_weight)) for row in rows]
     num = den = 0.0
-    for row in rows:
-        oi = _eff_call(row, volume_weight) if side == "call" else _eff_put(row, volume_weight)
-        num += oi * row.strike
-        den += oi
+    for row, (cw, pw) in zip(rows, weights):
+        w = cw if side == "call" else pw
+        num += w * row.strike
+        den += w
     return round(num / den, 2) if den > 0 else None
 
 
@@ -350,19 +379,20 @@ def _peak_oi_strike(rows: List[StrikeRow], side: str) -> Optional[float]:
 
 def compute(ticker: str, expiry: str, rows: List[StrikeRow], spot: Optional[float],
             t_years: float, dte: float, r: float = DEFAULT_RATE,
-            fallback_iv: float = DEFAULT_IV, volume_weight: float = 0.0) -> NetDealerResult:
+            fallback_iv: float = DEFAULT_IV, volume_weight: float = 0.0,
+            blend_mode: str = "additive", blend_alpha: float = 0.5) -> NetDealerResult:
     """Assemble the full net-dealer picture from a merged strike table.
 
-    ``volume_weight`` blends live session Volume into the stale OI when deriving
-    netDIR / C / the inventory centroids (effective inventory = OI + w·Volume).
+    netDIR / C / the inventory centroids are weighted by effective inventory that
+    blends stale OI with live Volume — see ``build_weights`` (additive vs normalized).
     """
     rows = sorted(rows, key=lambda x: x.strike)
-    vw = volume_weight
+    weights = build_weights(rows, volume_weight, blend_mode, blend_alpha)
     total_call_oi = sum(r_.call_oi for r_ in rows)
     total_put_oi = sum(r_.put_oi for r_ in rows)
 
-    c_target = find_c_target(rows, t_years, r, fallback_iv, volume_weight=vw)
-    c_netdir = (round(netdir_pct_at(c_target, rows, t_years, r, fallback_iv, vw), 4)
+    c_target = find_c_target(rows, t_years, r, fallback_iv, weights=weights)
+    c_netdir = (round(netdir_pct_at(c_target, rows, t_years, r, fallback_iv, weights=weights), 4)
                 if c_target is not None else None)
 
     per_strike: List[dict] = []
@@ -378,7 +408,7 @@ def compute(ticker: str, expiry: str, rows: List[StrikeRow], spot: Optional[floa
             "call_ask": row.call_ask,
             "put_ask": row.put_ask,
             # netDIR evaluated at this strike's price (the screenshot's column).
-            "netdir": round(netdir_pct_at(row.strike, rows, t_years, r, fallback_iv, vw), 4),
+            "netdir": round(netdir_pct_at(row.strike, rows, t_years, r, fallback_iv, weights=weights), 4),
         })
 
     note = ""
@@ -387,7 +417,7 @@ def compute(ticker: str, expiry: str, rows: List[StrikeRow], spot: Optional[floa
     elif total_call_oi + total_put_oi == 0:
         note = "Chain has no open interest yet (pre-market or brand-new expiry)."
 
-    short_avg = _oi_weighted_strike(rows, "put", vw)
+    short_avg = _oi_weighted_strike(rows, "put", weights=weights)
     sig = _crush_signals(rows, spot, c_target, short_avg, per_strike, t_years)
 
     return NetDealerResult(
@@ -400,7 +430,7 @@ def compute(ticker: str, expiry: str, rows: List[StrikeRow], spot: Optional[floa
         max_pain=max_pain(rows),
         call_wall=_peak_oi_strike(rows, "call"),
         put_wall=_peak_oi_strike(rows, "put"),
-        long_avg=_oi_weighted_strike(rows, "call", vw),
+        long_avg=_oi_weighted_strike(rows, "call", weights=weights),
         short_avg=short_avg,
         total_call_oi=total_call_oi,
         total_put_oi=total_put_oi,

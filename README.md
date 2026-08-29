@@ -72,8 +72,17 @@ by **effective inventory**:
 Inv(K) = OpenInterest(K)  +  VOLUME_WEIGHT · Volume(K)
 ```
 
-(`Inv_call` / `Inv_put` in the formula above; `VOLUME_WEIGHT` defaults to 1.0).
-In the chain, **blue = OI (known)** and **orange = Volume (dynamic)**.
+In the chain, **blue = OI (known)** and **orange = Volume (dynamic)**. Two blend
+modes (env-toggleable, revert anytime with no redeploy):
+
+- **`additive`** (default) — `Inv = OI + VOLUME_WEIGHT·Volume` (`VOLUME_WEIGHT`
+  defaults to **0.5**). Simple; but for names where Volume ≫ OI (index ETFs) the
+  flow can dominate.
+- **`normalized`** (`BLEND_MODE=normalized`) — a **scale-invariant** blend of the
+  OI and Volume *distributions*: `(1-α)·share_of_OI + α·share_of_Volume`
+  (`BLEND_ALPHA` = α, default 0.5). Volume gets an equal *vote* regardless of
+  whether it dwarfs or trails OI, so C behaves consistently across tickers and
+  through the session.
 
 **Volume skew** is its own directional signal: if incoming volume skews more
 call-side than OI implies, writers are positioning for a **pullback** (`volume_bias

@@ -77,10 +77,17 @@ class Settings:
     # ----- Net-dealer model knobs -------------------------------------------
     risk_free_rate: float = field(default_factory=lambda: _float("RISK_FREE_RATE", 0.043))
     fallback_iv: float = field(default_factory=lambda: _float("FALLBACK_IV", 0.40))
-    # Effective dealer inventory = Open Interest + VOLUME_WEIGHT × session Volume.
-    # OI is the stale "known inventory"; volume is the live "dynamic inventory"
-    # (where new activity is entering). 0 = OI only (legacy); 1 = weight equally.
-    volume_weight: float = field(default_factory=lambda: _float("VOLUME_WEIGHT", 1.0))
+    # How OI (stale "known" inventory) and Volume (live "dynamic" inventory) are
+    # combined when deriving netDIR / C / centroids.
+    #   BLEND_MODE=additive   -> effective = OI + VOLUME_WEIGHT × Volume (raw counts).
+    #                            Simple, but for high-volume names volume can swamp OI.
+    #   BLEND_MODE=normalized -> scale-invariant blend of the OI and Volume *shapes*:
+    #                            (1-α)·share_of_OI + α·share_of_Volume. Volume gets an
+    #                            equal vote regardless of how it compares to OI.
+    # Revert anytime by flipping these env vars — no redeploy of code needed.
+    blend_mode: str = field(default_factory=lambda: os.getenv("BLEND_MODE", "additive").lower())
+    volume_weight: float = field(default_factory=lambda: _float("VOLUME_WEIGHT", 0.5))
+    blend_alpha: float = field(default_factory=lambda: _float("BLEND_ALPHA", 0.5))
     # How many strikes (each side of the money) to pull for the chain.
     strike_count: int = field(default_factory=lambda: _int("STRIKE_COUNT", 80))
     # How far out (days) to look when listing available expirations.

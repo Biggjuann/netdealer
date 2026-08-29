@@ -223,6 +223,42 @@ def test_volume_disagreement_lowers_confidence():
     print(f"ok  volume conflict lowers confidence: {agree} -> {conflict}")
 
 
+def test_normalized_blend_scale_invariant():
+    # Normalized blend must not change when ALL volume is scaled by a constant —
+    # that's the whole point (volume gets an equal vote regardless of magnitude).
+    from app.net_dealer import build_weights
+    rows = []
+    for k in range(80, 121, 5):
+        dist = abs(k - 100)
+        oi = max(100.0, 2000.0 - dist * 60.0)
+        rows.append(StrikeRow(strike=float(k), call_oi=oi, put_oi=oi * 1.2,
+                              call_volume=oi * 3, put_volume=oi * 5,
+                              call_iv=0.35, put_iv=0.35))
+    w1 = build_weights(rows, blend_mode="normalized", alpha=0.5)
+    # 10x all volume
+    rows10 = [StrikeRow(strike=r.strike, call_oi=r.call_oi, put_oi=r.put_oi,
+                        call_volume=r.call_volume * 10, put_volume=r.put_volume * 10,
+                        call_iv=0.35, put_iv=0.35) for r in rows]
+    c1 = find_c_target(rows, T, weights=w1)
+    c10 = find_c_target(rows10, T, weights=build_weights(rows10, blend_mode="normalized", alpha=0.5))
+    assert approx(c1, c10, 0.02), f"normalized C must be scale-invariant: {c1} vs {c10}"
+    # Additive is NOT scale-invariant (sanity: scaling volume moves additive C).
+    ca1 = find_c_target(rows, T, volume_weight=1.0)
+    ca10 = find_c_target(rows10, T, volume_weight=1.0)
+    assert not approx(ca1, ca10, 0.02), "additive should move when volume is scaled"
+    print(f"ok  normalized scale-invariant ({c1}=={c10}); additive moves ({ca1}->{ca10})")
+
+
+def test_blend_modes_run():
+    rows = [StrikeRow(strike=float(k), call_oi=1000, put_oi=1200,
+                      call_volume=3000, put_volume=5000, call_iv=0.3, put_iv=0.3)
+            for k in range(90, 111, 5)]
+    add = compute("T", "2099-01-15", rows, 100.0, T, 5.0, volume_weight=0.5, blend_mode="additive")
+    norm = compute("T", "2099-01-15", rows, 100.0, T, 5.0, blend_mode="normalized", blend_alpha=0.5)
+    assert add.c_target is not None and norm.c_target is not None
+    print(f"ok  blend modes: additive C={add.c_target}  normalized C={norm.c_target}")
+
+
 def test_empty_chain_is_safe():
     res = compute("X", "2099-01-15", [], spot=None, t_years=T, dte=5.0)
     assert res.c_target is None
