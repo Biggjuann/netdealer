@@ -88,23 +88,25 @@ def test_run_scan_actionable_rows():
     print(f"ok  run_scan: {d['opportunities']}/{d['scanned']} actionable opportunities")
 
 
-def test_run_scan_multiweek():
+def test_scan_dte_filter():
     prov = MockChainProvider()
     tickers = ["NVDA", "AAPL", "TSLA"]
-    both = run_scan(prov, tickers=tickers, use_cache=False, weeks=[0, 1])
-    assert both["weeks"] == [0, 1]
-    assert both["evaluations"] == len(tickers) * 2
-    # both week indices appear, and each row carries the expiry for its week
-    idxs = {r["week_index"] for r in both["results"]}
-    assert idxs <= {0, 1}
-    # next week's expiry is strictly later than this week's for the same ticker
-    by_ticker = {}
-    for r in both["results"]:
-        by_ticker.setdefault(r["ticker"], {})[r["week_index"]] = r["expiry"]
-    for t, wk in by_ticker.items():
-        if 0 in wk and 1 in wk:
-            assert wk[1] > wk[0], f"{t}: next-week expiry {wk[1]} must be after {wk[0]}"
-    print(f"ok  multiweek: {both['evaluations']} evaluations across weeks {both['weeks']}")
+    # 0DTE scope: only same-day expiries survive.
+    d0 = run_scan(prov, tickers=tickers, use_cache=False, weeks=[0], max_dte=0.99)
+    assert d0["max_dte"] == 0.99 and d0["results"], "0DTE scan should have same-day rows"
+    for r in d0["results"]:
+        assert r["dte"] < 1.0, f"0DTE scope must be same-day only: {r['dte']}"
+    # <=1DTE scope: same-day + next-day, nothing longer-dated.
+    d1 = run_scan(prov, tickers=tickers, use_cache=False, weeks=[0, 1], max_dte=1.99)
+    assert d1["results"]
+    for r in d1["results"]:
+        assert r["dte"] <= 1.99, f"<=1DTE scope leaked a longer expiry: {r['dte']}"
+    # a longer expiry is dropped as skipped, not ranked
+    long_scan = run_scan(prov, tickers=["NVDA"], use_cache=False, weeks=[0, 1, 2, 3, 4],
+                         max_dte=1.99)
+    assert all(r["dte"] <= 1.99 for r in long_scan["results"])
+    assert any("DTE cap" in s["reason"] for s in long_scan["skipped"])
+    print(f"ok  DTE filter: 0DTE rows={len(d0['results'])}, ≤1DTE rows={len(d1['results'])}")
 
 
 def test_scan_ranks_by_confidence():

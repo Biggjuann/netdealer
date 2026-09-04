@@ -121,23 +121,25 @@ def net_dealer(ticker: str = Query(..., min_length=1),
     return JSONResponse(payload)
 
 
-_WEEK_MAP = {"this": [0], "next": [1], "both": [0, 1]}
+# Same-day / next-day expiry scopes: (expiry slots to fetch, max calendar DTE).
+_DTE_MAP = {"0": ([0], 0.99), "1": ([0, 1], 1.99)}
 
 
 @app.get("/api/scan")
 def scan(refresh: bool = Query(False, description="bypass the short-lived cache"),
          range_filter: bool = Query(None, description="override the 30d range achievability filter"),
-         weeks: str = Query("this", description="which weekly expiry: this | next | both")
+         dte: str = Query("1", description="expiry scope: 0 = same-day (0DTE), 1 = same/next-day (<=1DTE)")
          ) -> JSONResponse:
     """Rank the curated liquid universe by projected option %-gain to the C pin.
 
-    ``weeks`` picks the expiry: this week (nearest), next week, or both.
+    Only same-day (0DTE) and next-day (1DTE) expirations are surfaced (``dte``).
     By default only surfaces tickers whose move to C is within their proven
     ~30-day range (Biggjuann/Range methodology); pass range_filter=false to see all.
     """
-    wk = _WEEK_MAP.get((weeks or "this").strip().lower(), [0])
+    weeks, max_dte = _DTE_MAP.get((dte or "1").strip(), ([0, 1], 1.99))
     try:
-        payload = run_scan(provider, use_cache=not refresh, range_filter=range_filter, weeks=wk)
+        payload = run_scan(provider, use_cache=not refresh, range_filter=range_filter,
+                           weeks=weeks, max_dte=max_dte)
     except Exception as exc:  # pragma: no cover - defensive
         log.warning("scan failed: %s", exc)
         return JSONResponse({"error": f"scan failed: {exc}"}, status_code=502)
