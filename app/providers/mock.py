@@ -49,6 +49,12 @@ def _next_fridays(n: int) -> List[str]:
     return out
 
 
+def _next_days(n: int) -> List[str]:
+    """Today, tomorrow, … — synthetic daily (0DTE, 1DTE, …) expiries for the scanner."""
+    today = dt.date.today()
+    return [(today + dt.timedelta(days=i)).isoformat() for i in range(n)]
+
+
 class MockChainProvider:
     def get_expirations(self, ticker: str) -> List[str]:
         return _next_fridays(5)
@@ -56,11 +62,15 @@ class MockChainProvider:
     def get_weekly_chain(self, ticker: str, week_index: int = 0,
                          within_days: Optional[int] = None,
                          strike_count: Optional[int] = None):
-        """(expiry, rows, spot) for the ``week_index``-th upcoming Friday."""
-        fridays = _next_fridays(week_index + 1)
-        if len(fridays) <= week_index:
+        """(expiry, rows, spot) for the ``week_index``-th nearest expiry.
+
+        Mock uses synthetic *daily* expiries (today = 0DTE, tomorrow = 1DTE, …)
+        so the same-day / next-day scanner has short-dated chains to work with.
+        """
+        days = _next_days(week_index + 1)
+        if len(days) <= week_index:
             return None, [], None
-        expiry = fridays[week_index]
+        expiry = days[week_index]
         rows, spot = self.get_chain(ticker, expiry, strike_count)
         return expiry, rows, spot
 
