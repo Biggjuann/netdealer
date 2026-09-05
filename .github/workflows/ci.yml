@@ -36,6 +36,9 @@ jobs:
           DATA_MODE: mock
         run: python tests/test_range.py
 
+      - name: Run market-calendar tests
+        run: python tests/test_calendar.py
+
       - name: Smoke-test the app boots (mock mode)
         env:
           DATA_MODE: mock

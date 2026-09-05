@@ -31,7 +31,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from typing import List, Optional
 
+import datetime as _dt
+
 from app.config import settings
+from app.market_calendar import sessions_to_expiry
 from app.net_dealer import compute, setup_confidence
 from app.range_stats import compute_range
 from app.timeutil import t_years
@@ -48,7 +51,8 @@ class ScanRow:
     direction: Optional[str]         # "CALL" / "PUT"
     expiry: Optional[str]
     dte: Optional[float]
-    week_index: int = 0              # 0 = this week, 1 = next week…
+    sessions: Optional[int] = None   # trading sessions to expiry (0 = today, 1 = next)
+    week_index: int = 0              # expiry slot (0 = nearest, 1 = second-nearest)
     strike: Optional[float] = None
     premium: Optional[float] = None  # ask paid
     est_gain_pct: Optional[float] = None   # projected % gain at the C pin
@@ -181,8 +185,15 @@ def _best_contract(rows, c_target: float, side: str):
             b["contract_oi"], b["contract_volume"], b["breakeven"])
 
 
+def _sessions(expiry: str) -> Optional[int]:
+    try:
+        return sessions_to_expiry(_dt.date.fromisoformat(expiry))
+    except (ValueError, TypeError):
+        return None
+
+
 def evaluate(provider, ticker: str, week_index: int = 0,
-             max_dte: Optional[float] = None) -> ScanRow:
+             max_sessions: Optional[int] = None) -> ScanRow:
     try:
         expiry, rows, spot = provider.get_weekly_chain(
             ticker, week_index=week_index, strike_count=settings.strike_count)
@@ -197,11 +208,14 @@ def evaluate(provider, ticker: str, week_index: int = 0,
                        skip="no chain / spot")
 
     ty, dte = t_years(expiry)
-    # Same-day / next-day only: drop anything longer-dated than the DTE cap.
-    if max_dte is not None and dte > max_dte:
+    sess = _sessions(expiry)
+    # Same-day / next-day only: drop anything beyond the trading-session cap
+    # (holiday- and weekend-aware, so Fri→Mon counts as 1 session).
+    if max_sessions is not None and sess is not None and sess > max_sessions:
         return ScanRow(ticker=ticker, spot=round(spot, 2), c_target=None, edge_pct=None,
-                       direction=None, expiry=expiry, dte=round(dte, 2), week_index=week_index,
-                       skip=f"{dte:.1f}d > {max_dte:.0f}DTE cap")
+                       direction=None, expiry=expiry, dte=round(dte, 2), sessions=sess,
+                       week_index=week_index,
+                       skip=f"{sess}DTE > {max_sessions}DTE cap")
     res = compute(ticker, expiry, rows, spot, ty, dte,
                   r=settings.risk_free_rate, fallback_iv=settings.fallback_iv,
                   volume_weight=settings.volume_weight, blend_mode=settings.blend_mode,
@@ -209,7 +223,7 @@ def evaluate(provider, ticker: str, week_index: int = 0,
     c = res.c_target
     base = ScanRow(ticker=ticker, spot=spot, c_target=c,
                    edge_pct=None, direction=None, expiry=expiry, dte=round(dte, 2),
-                   week_index=week_index,
+                   sessions=sess, week_index=week_index,
                    max_pain=res.max_pain, call_wall=res.call_wall, put_wall=res.put_wall)
     if c is None or not spot:
         base.skip = "no C target"
@@ -277,14 +291,14 @@ _cache: dict = {"ts": 0.0, "key": None, "payload": None}
 
 def run_scan(provider, tickers: Optional[List[str]] = None, use_cache: bool = True,
              range_filter: Optional[bool] = None, weeks: Optional[List[int]] = None,
-             max_dte: Optional[float] = None) -> dict:
+             max_sessions: Optional[int] = None) -> dict:
     tickers = [t.upper() for t in (tickers or settings.scan_tickers)]
     rfilter = settings.range_filter if range_filter is None else range_filter
-    max_dte = settings.scan_max_dte if max_dte is None else max_dte
+    max_sessions = settings.scan_max_sessions if max_sessions is None else max_sessions
     weeks = sorted(set(weeks if weeks else [0, 1]))
     # ticker × expiry-slot combinations to evaluate (nearest expiries)
     tasks = [(t, w) for t in tickers for w in weeks]
-    key = (tuple(tickers), tuple(weeks), max_dte, "live" if settings.live else "mock", rfilter)
+    key = (tuple(tickers), tuple(weeks), max_sessions, "live" if settings.live else "mock", rfilter)
     now = time.time()
     if use_cache:
         with _lock:
@@ -299,7 +313,7 @@ def run_scan(provider, tickers: Optional[List[str]] = None, use_cache: bool = Tr
     results: List[ScanRow] = []
     workers = max(1, min(settings.scan_workers, len(tasks)))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futs = {pool.submit(evaluate, provider, t, w, max_dte): (t, w) for (t, w) in tasks}
+        futs = {pool.submit(evaluate, provider, t, w, max_sessions): (t, w) for (t, w) in tasks}
         for fut in as_completed(futs):
             try:
                 results.append(fut.result())
@@ -342,7 +356,7 @@ def run_scan(provider, tickers: Optional[List[str]] = None, use_cache: bool = Tr
     payload = {
         "mode": "live" if settings.live else "mock",
         "scanned": len(tickers),
-        "max_dte": max_dte,
+        "max_sessions": max_sessions,
         "evaluations": len(tasks),
         "opportunities": len(ranked),
         "range_filter": rfilter,

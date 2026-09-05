@@ -241,7 +241,7 @@
       <label class="scanopt" title="Only same-day (0DTE) and next-day (1DTE) expirations">
         Expiry
         <select id="scanDte" style="padding:5px 8px">
-          <option value="1">≤1 DTE (today + next day)</option>
+          <option value="1">≤1 DTE (today + next session)</option>
           <option value="0">0DTE (today only)</option>
         </select>
       </label>
@@ -671,7 +671,7 @@ function renderScan(d){
   const filtTxt = d.range_filter
     ? ` · <span style="color:var(--amber)">${d.range_filtered_out} out-of-range filtered</span>`
     : ` · <span style="color:var(--muted)">range filter off</span>`;
-  const scopeTxt = (d.max_dte!=null && d.max_dte < 1) ? "0DTE" : "≤1 DTE";
+  const scopeTxt = (d.max_sessions===0) ? "0DTE" : "≤1 DTE";
   $("scanSum").innerHTML = `Scanned <b>${d.scanned}</b> · <b>${scopeTxt}</b> · <b>${d.opportunities}</b> opportunities`
     + filtTxt + ` · <span style="color:var(--muted)">${d.mode.toUpperCase()}${cacheTxt}</span>`;
   const body=$("scanBody"); body.innerHTML="";
@@ -701,7 +701,7 @@ function renderScan(d){
       `<td class="${edgeCls}">${edgeArrow} ${(Math.abs(r.edge_pct)*100).toFixed(2)}%</td>`+
       `<td class="${sideCls}" title="${crushTitle}">${r.direction}${agreeMark}${volMark}</td>`+
       `<td>${fmt(r.strike, r.strike>=100?0:1)}</td>`+
-      `<td style="color:var(--muted)">${r.expiry||"—"}${r.dte!=null?` <span class="reach ${r.dte<1?'mean':'max'}" style="padding:1px 5px">${r.dte<1?'0DTE':Math.round(r.dte)+'DTE'}</span>`:""}</td>`+
+      `<td style="color:var(--muted)">${r.expiry||"—"}${r.sessions!=null?` <span class="reach ${r.sessions<1?'mean':'max'}" style="padding:1px 5px">${r.sessions}DTE</span>`:""}</td>`+
       `<td>$${fmt(r.premium)}</td>`+
       `<td class="gain">+${(r.est_gain_pct*100).toFixed(0)}%</td>`+
       `<td>${confBadge(r.confidence)}</td>`+
