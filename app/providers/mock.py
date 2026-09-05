@@ -50,9 +50,15 @@ def _next_fridays(n: int) -> List[str]:
 
 
 def _next_days(n: int) -> List[str]:
-    """Today, tomorrow, … — synthetic daily (0DTE, 1DTE, …) expiries for the scanner."""
-    today = dt.date.today()
-    return [(today + dt.timedelta(days=i)).isoformat() for i in range(n)]
+    """Synthetic short-dated expiries: today (0DTE) then the next trading sessions."""
+    from app.market_calendar import is_trading_day
+    out = [dt.date.today().isoformat()]
+    d = dt.date.today()
+    while len(out) < n:
+        d += dt.timedelta(days=1)
+        if is_trading_day(d):
+            out.append(d.isoformat())
+    return out[:n]
 
 
 class MockChainProvider:

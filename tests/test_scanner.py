@@ -91,22 +91,22 @@ def test_run_scan_actionable_rows():
 def test_scan_dte_filter():
     prov = MockChainProvider()
     tickers = ["NVDA", "AAPL", "TSLA"]
-    # 0DTE scope: only same-day expiries survive.
-    d0 = run_scan(prov, tickers=tickers, use_cache=False, weeks=[0], max_dte=0.99)
-    assert d0["max_dte"] == 0.99 and d0["results"], "0DTE scan should have same-day rows"
+    # 0DTE scope: only same-session (sessions == 0) expiries survive.
+    d0 = run_scan(prov, tickers=tickers, use_cache=False, weeks=[0], max_sessions=0)
+    assert d0["max_sessions"] == 0 and d0["results"], "0DTE scan should have same-day rows"
     for r in d0["results"]:
-        assert r["dte"] < 1.0, f"0DTE scope must be same-day only: {r['dte']}"
-    # <=1DTE scope: same-day + next-day, nothing longer-dated.
-    d1 = run_scan(prov, tickers=tickers, use_cache=False, weeks=[0, 1], max_dte=1.99)
+        assert r["sessions"] == 0, f"0DTE scope must be same-session only: {r['sessions']}"
+    # <=1DTE scope: same + next trading session, nothing further out.
+    d1 = run_scan(prov, tickers=tickers, use_cache=False, weeks=[0, 1], max_sessions=1)
     assert d1["results"]
     for r in d1["results"]:
-        assert r["dte"] <= 1.99, f"<=1DTE scope leaked a longer expiry: {r['dte']}"
-    # a longer expiry is dropped as skipped, not ranked
+        assert r["sessions"] <= 1, f"<=1DTE scope leaked a longer expiry: {r['sessions']}"
+    # a longer-dated slot is dropped as skipped, not ranked
     long_scan = run_scan(prov, tickers=["NVDA"], use_cache=False, weeks=[0, 1, 2, 3, 4],
-                         max_dte=1.99)
-    assert all(r["dte"] <= 1.99 for r in long_scan["results"])
+                         max_sessions=1)
+    assert all(r["sessions"] <= 1 for r in long_scan["results"])
     assert any("DTE cap" in s["reason"] for s in long_scan["skipped"])
-    print(f"ok  DTE filter: 0DTE rows={len(d0['results'])}, ≤1DTE rows={len(d1['results'])}")
+    print(f"ok  session filter: 0DTE rows={len(d0['results'])}, ≤1DTE rows={len(d1['results'])}")
 
 
 def test_scan_ranks_by_confidence():

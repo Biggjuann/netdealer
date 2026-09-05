@@ -121,25 +121,26 @@ def net_dealer(ticker: str = Query(..., min_length=1),
     return JSONResponse(payload)
 
 
-# Same-day / next-day expiry scopes: (expiry slots to fetch, max calendar DTE).
-_DTE_MAP = {"0": ([0], 0.99), "1": ([0, 1], 1.99)}
+# Same-day / next-session scopes: (expiry slots to fetch, max trading sessions).
+_DTE_MAP = {"0": ([0], 0), "1": ([0, 1], 1)}
 
 
 @app.get("/api/scan")
 def scan(refresh: bool = Query(False, description="bypass the short-lived cache"),
          range_filter: bool = Query(None, description="override the 30d range achievability filter"),
-         dte: str = Query("1", description="expiry scope: 0 = same-day (0DTE), 1 = same/next-day (<=1DTE)")
+         dte: str = Query("1", description="expiry scope: 0 = same-day (0DTE), 1 = same/next trading session (<=1DTE)")
          ) -> JSONResponse:
     """Rank the curated liquid universe by projected option %-gain to the C pin.
 
-    Only same-day (0DTE) and next-day (1DTE) expirations are surfaced (``dte``).
-    By default only surfaces tickers whose move to C is within their proven
-    ~30-day range (Biggjuann/Range methodology); pass range_filter=false to see all.
+    Only same-day (0DTE) and next-trading-session (1DTE) expirations are surfaced
+    (``dte``); the session count is holiday- and weekend-aware. By default only
+    surfaces tickers whose move to C is within their proven ~30-day range
+    (Biggjuann/Range methodology); pass range_filter=false to see all.
     """
-    weeks, max_dte = _DTE_MAP.get((dte or "1").strip(), ([0, 1], 1.99))
+    weeks, max_sessions = _DTE_MAP.get((dte or "1").strip(), ([0, 1], 1))
     try:
         payload = run_scan(provider, use_cache=not refresh, range_filter=range_filter,
-                           weeks=weeks, max_dte=max_dte)
+                           weeks=weeks, max_sessions=max_sessions)
     except Exception as exc:  # pragma: no cover - defensive
         log.warning("scan failed: %s", exc)
         return JSONResponse({"error": f"scan failed: {exc}"}, status_code=502)
