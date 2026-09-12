@@ -17,7 +17,10 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+import datetime as dt
+
 from app.config import settings
+from app.market_calendar import sessions_to_expiry
 from app.net_dealer import compute, setup_confidence
 from app.providers.factory import build_provider
 from app.scanner import _range_for, classify_range, rank_contracts, run_scan
@@ -123,6 +126,48 @@ def net_dealer(ticker: str = Query(..., min_length=1),
 
 # Same-day / next-session scopes: (expiry slots to fetch, max trading sessions).
 _DTE_MAP = {"0": ([0], 0), "1": ([0, 1], 1)}
+
+
+@app.get("/api/weekly-map")
+def weekly_map(ticker: str = Query(..., min_length=1)) -> JSONResponse:
+    """Dealer levels (C / LongAvg / ShortAvg / walls) for each daily expiry across
+    the week — the Daily Map term structure."""
+    try:
+        chains = provider.get_week_chains(ticker, settings.map_max_days,
+                                          settings.map_max_expiries, settings.strike_count)
+    except Exception as exc:  # pragma: no cover - network
+        log.warning("weekly-map %s failed: %s", ticker, exc)
+        return JSONResponse({"error": f"chain fetch failed: {exc}"}, status_code=502)
+
+    spot = None
+    entries = []
+    for expiry, rows, s in chains:
+        if not rows or not s:
+            continue
+        spot = spot or s
+        ty, dte = t_years(expiry)
+        res = compute(ticker, expiry, rows, s, ty, dte,
+                      r=settings.risk_free_rate, fallback_iv=settings.fallback_iv,
+                      volume_weight=settings.volume_weight, blend_mode=settings.blend_mode,
+                      blend_alpha=settings.blend_alpha)
+        if res.c_target is None:
+            continue
+        try:
+            sess = sessions_to_expiry(dt.date.fromisoformat(expiry))
+        except (ValueError, TypeError):
+            sess = None
+        entries.append({
+            "expiry": expiry, "dte": round(dte, 2), "sessions": sess,
+            "c_target": res.c_target, "long_avg": res.long_avg, "short_avg": res.short_avg,
+            "call_wall": res.call_wall, "put_wall": res.put_wall, "max_pain": res.max_pain,
+            "sweet_spot_low": res.sweet_spot_low, "sweet_spot_high": res.sweet_spot_high,
+            "crush_direction": res.crush_direction, "trade_side": res.trade_side,
+            "confidence": res.confidence,
+        })
+    return JSONResponse({"ticker": ticker.upper(),
+                         "spot": round(spot, 2) if spot else None,
+                         "mode": "live" if settings.live else "mock",
+                         "expiries": entries})
 
 
 @app.get("/api/scan")

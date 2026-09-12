@@ -158,6 +158,7 @@
   <div class="tabs">
     <button class="tab active" id="tabCalc" data-view="calc">🎯 Calculator</button>
     <button class="tab" id="tabScan" data-view="scan">📡 Opportunity Scanner</button>
+    <button class="tab" id="tabMap" data-view="map">🗺️ Daily Map</button>
   </div>
   <div id="msg"></div>
 
@@ -268,6 +269,32 @@
       <b>Est. gain is shown but does NOT drive the ranking</b> (it assumes a full pin to C by expiry — an idealized projection, only a
       tiebreaker here). Click any row to open it in the Calculator. <b>Not financial advice.</b></p>
   </div><!-- /scanView -->
+
+  <div id="mapView" style="display:none">
+    <div class="scanbar">
+      <button id="mapBtn" class="go">Load map</button>
+      <div class="sum" id="mapSum">Type a ticker up top, then <b>Load map</b> — plots C, LongAvg &amp; ShortAvg for each daily expiry this week.</div>
+    </div>
+    <div class="panel">
+      <h3>Daily Map — dealer levels by daily expiry</h3>
+      <p class="hint">Each daily expiry's <b style="color:var(--pink)">C</b> (net-dealer centerpoint),
+        <b style="color:#7aa2f7">LongAvg</b> (call-inventory centroid) &amp; <b style="color:var(--green)">ShortAvg</b>
+        (put-inventory centroid) across the week. The shaded band is the LongAvg–ShortAvg
+        <b>Dealer Inventory Risk range</b>; the dashed line is live spot. Hover any expiry for the full read.
+        <b>Not financial advice.</b></p>
+      <div class="profilewrap">
+        <svg class="profile" id="mapChart" style="height:360px" preserveAspectRatio="none"></svg>
+        <div class="charttip" id="mapTip"></div>
+      </div>
+      <div class="legend">
+        <span><span class="sw" style="background:var(--pink)"></span>C (centerpoint)</span>
+        <span><span class="sw" style="background:#7aa2f7"></span>LongAvg (calls)</span>
+        <span><span class="sw" style="background:var(--green)"></span>ShortAvg (puts)</span>
+        <span><span class="sw" style="background:var(--blue)"></span>Spot</span>
+        <span><span class="sw" style="background:rgba(167,139,250,.4)"></span>DIR range</span>
+      </div>
+    </div>
+  </div><!-- /mapView -->
 </main>
 
 <div class="modal" id="modal">
@@ -632,9 +659,107 @@ let SCANNED = false;
 function showView(v){
   $("calcView").style.display = v==="calc" ? "" : "none";
   $("scanView").style.display = v==="scan" ? "" : "none";
+  $("mapView").style.display = v==="map" ? "" : "none";
   $("tabCalc").classList.toggle("active", v==="calc");
   $("tabScan").classList.toggle("active", v==="scan");
+  $("tabMap").classList.toggle("active", v==="map");
   if(v==="scan" && !SCANNED) runScan();
+  if(v==="map" && currentTicker() && MAP_TICKER!==currentTicker()) runMap();
+}
+
+// ---- Daily Map ----
+let MAP_TICKER = null;
+let MAP = null;
+async function runMap(){
+  const t=currentTicker(); if(!t){ msg("Pick or type a ticker first."); return; }
+  const btn=$("mapBtn"); btn.disabled=true; const prev=btn.textContent; btn.textContent="Loading…";
+  $("mapSum").textContent="Loading "+t+" daily map…"; msg("");
+  try{
+    const r=await fetch(api("/api/weekly-map?ticker="+encodeURIComponent(t)));
+    const d=await r.json();
+    if(d.error){ msg(d.error); return; }
+    MAP_TICKER=t; renderMap(d);
+  }catch(e){ msg("Daily map failed: "+e); }
+  finally{ btn.disabled=false; btn.textContent=prev; }
+}
+function renderMap(d){
+  const E=d.expiries||[];
+  $("mapSum").innerHTML = E.length
+    ? `<b>${d.ticker}</b> · spot <b>${fmt(d.spot)}</b> · <b>${E.length}</b> daily expiries · `
+      + `<span style="color:var(--muted)">${d.mode.toUpperCase()}</span>`
+    : `No daily expiries found for <b>${d.ticker}</b> (this ticker may only list weekly options).`;
+  drawMap(d);
+}
+function drawMap(d){
+  const svg=$("mapChart"); svg.innerHTML=""; MAP=null;
+  const E=d.expiries||[]; if(!E.length) return;
+  const W=1000,H=360,padL=14,padR=60,padT=24,padB=44;
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  const NS="http://www.w3.org/2000/svg";
+  const line=(x1,y1,x2,y2,st,w,dash)=>{const l=document.createElementNS(NS,"line");
+    l.setAttribute("x1",x1);l.setAttribute("y1",y1);l.setAttribute("x2",x2);l.setAttribute("y2",y2);
+    l.setAttribute("stroke",st);l.setAttribute("stroke-width",w||1);if(dash)l.setAttribute("stroke-dasharray",dash);svg.appendChild(l);};
+  const text=(tx,ty,s,fill,anchor,size)=>{const t=document.createElementNS(NS,"text");
+    t.setAttribute("x",tx);t.setAttribute("y",ty);t.setAttribute("fill",fill||"#7e8aa3");t.setAttribute("font-size",size||11);
+    t.setAttribute("text-anchor",anchor||"middle");t.setAttribute("font-family","ui-monospace,monospace");t.textContent=s;svg.appendChild(t);};
+  const pathd=(dd,stroke,w,fill)=>{const p=document.createElementNS(NS,"path");p.setAttribute("d",dd);
+    p.setAttribute("fill",fill||"none");p.setAttribute("stroke",stroke||"none");if(w)p.setAttribute("stroke-width",w);svg.appendChild(p);};
+  const dot=(cx,cy,rr,fill)=>{const c=document.createElementNS(NS,"circle");c.setAttribute("cx",cx);c.setAttribute("cy",cy);
+    c.setAttribute("r",rr);c.setAttribute("fill",fill);svg.appendChild(c);};
+  const vals=[]; E.forEach(e=>[e.c_target,e.long_avg,e.short_avg].forEach(v=>{if(v!=null)vals.push(v);}));
+  if(d.spot!=null) vals.push(d.spot);
+  let lo=Math.min(...vals), hi=Math.max(...vals); const pad=(hi-lo)*0.18||1; lo-=pad; hi+=pad;
+  const n=E.length;
+  const x=i=> padL + (n===1?(W-padL-padR)/2 : i/(n-1)*(W-padL-padR));
+  const y=p=> padT + (1-(p-lo)/(hi-lo))*(H-padT-padB);
+  // grid + right price axis
+  for(let k=0;k<=4;k++){ const price=lo+(hi-lo)*k/4, yy=y(price);
+    line(padL,yy,W-padR,yy,"#1c2740",1); text(W-padR+5,yy+3,price.toFixed(2),"#56627d","start",10); }
+  // DIR range ribbon (LongAvg top → ShortAvg bottom)
+  let top="",bot="";
+  E.forEach((e,i)=>{ if(e.long_avg!=null) top+=(top?"L":"M")+x(i)+" "+y(e.long_avg)+" "; });
+  for(let i=n-1;i>=0;i--){ if(E[i].short_avg!=null) bot+="L"+x(i)+" "+y(E[i].short_avg)+" "; }
+  if(top&&bot) pathd(top+bot+"Z",null,0,"rgba(167,139,250,.15)");
+  // spot reference
+  if(d.spot!=null && d.spot>=lo && d.spot<=hi){ line(padL,y(d.spot),W-padR,y(d.spot),"#38bdf8",1.5,"4 4");
+    text(W-padR+5,y(d.spot)-4,"spot","#38bdf8","start",10); }
+  // series
+  const series=(key,color,w,r)=>{ let p=""; E.forEach((e,i)=>{ if(e[key]!=null){ p+=(p?"L":"M")+x(i)+" "+y(e[key])+" "; }});
+    if(p) pathd(p,color,w); E.forEach((e,i)=>{ if(e[key]!=null) dot(x(i),y(e[key]),r,color); }); };
+  series("long_avg","#7aa2f7",2,2.5); series("short_avg","#34d399",2,2.5); series("c_target","#ec4899",2.5,3.5);
+  // x labels (expiry MM-DD + DTE)
+  E.forEach((e,i)=>{ text(x(i),H-24,e.expiry.slice(5),"#7e8aa3","middle",10);
+    text(x(i),H-10,(e.sessions!=null?e.sessions:"?")+"DTE","#56627d","middle",9); });
+  // crosshair holder
+  const xh=document.createElementNS(NS,"line"); xh.setAttribute("id","mapXhair");
+  xh.setAttribute("y1",padT);xh.setAttribute("y2",H-padB);xh.setAttribute("stroke","#e6edf7");
+  xh.setAttribute("stroke-width",1);xh.setAttribute("stroke-dasharray","2 2");xh.setAttribute("opacity",0);svg.appendChild(xh);
+  MAP={E,W,padL,padR,padT,padB,n,x};
+}
+function setupMapHover(){
+  const svg=$("mapChart"), tip=$("mapTip");
+  svg.addEventListener("mousemove",ev=>{
+    if(!MAP){return;} const rect=svg.getBoundingClientRect();
+    const sx=(ev.clientX-rect.left)/rect.width*MAP.W;
+    // nearest expiry index
+    let bi=0,bd=1e9; for(let i=0;i<MAP.n;i++){ const dd=Math.abs(MAP.x(i)-sx); if(dd<bd){bd=dd;bi=i;} }
+    const e=MAP.E[bi]; const xh=document.getElementById("mapXhair");
+    if(xh){ xh.setAttribute("x1",MAP.x(bi)); xh.setAttribute("x2",MAP.x(bi)); xh.setAttribute("opacity",.5); }
+    const side = e.trade_side==="CALL" ? "sideCall":"sidePut";
+    tip.innerHTML =
+      `<div><b>${e.expiry}</b> · ${e.sessions!=null?e.sessions+"DTE":""}</div>`+
+      `<div><span class="k">C</span> <b style="color:var(--pink)">${fmt(e.c_target)}</b>`+
+      ` &nbsp;<span class="k">Long</span> <b>${fmt(e.long_avg)}</b> &nbsp;<span class="k">Short</span> <b>${fmt(e.short_avg)}</b></div>`+
+      `<div><span class="k">walls</span> ${fmt(e.put_wall)} / ${fmt(e.call_wall)} &nbsp;<span class="k">pain</span> ${fmt(e.max_pain)}</div>`+
+      `<div><span class="${side}">${e.trade_side||""}</span> `+
+      `<span class="k">crush</span> ${e.crush_direction||"—"} &nbsp;<span class="k">setup</span> ${e.confidence!=null?Math.round(e.confidence):"—"}</div>`;
+    tip.style.display="block";
+    let left=(ev.clientX-rect.left)+14, topp=(ev.clientY-rect.top)+12;
+    if(left+tip.offsetWidth>rect.width) left=(ev.clientX-rect.left)-tip.offsetWidth-14;
+    tip.style.left=Math.max(0,left)+"px"; tip.style.top=topp+"px";
+  });
+  svg.addEventListener("mouseleave",()=>{ tip.style.display="none";
+    const xh=document.getElementById("mapXhair"); if(xh) xh.setAttribute("opacity",0); });
 }
 async function runScan(){
   const btn=$("scanBtn"); btn.disabled=true; const prev=btn.textContent; btn.textContent="Scanning…";
@@ -740,6 +865,8 @@ $("tickerInput").addEventListener("keydown",e=>{ if(e.key==="Enter"){ onTickerCh
 $("expirySel").addEventListener("change",()=>{ if($("expirySel").value) calculate(); });
 $("tabCalc").addEventListener("click",()=>showView("calc"));
 $("tabScan").addEventListener("click",()=>showView("scan"));
+$("tabMap").addEventListener("click",()=>showView("map"));
+$("mapBtn").addEventListener("click",runMap);
 $("scanBtn").addEventListener("click",runScan);
 $("scanRange").addEventListener("change",()=>{ if(SCANNED) runScan(); });
 $("scanDte").addEventListener("change",()=>{ if(SCANNED) runScan(); });
@@ -754,6 +881,7 @@ $("apiSave").addEventListener("click",()=>{
 });
 
 setupProfileHover();
+setupMapHover();
 async function boot(){ await loadConfig(); _lastTicker = currentTicker(); await loadExpiries(); }
 boot();
 </script>
