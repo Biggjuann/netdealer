@@ -85,6 +85,15 @@ class MockChainProvider:
         """Backward-compatible alias for the nearest (week 0) expiry."""
         return self.get_weekly_chain(ticker, 0, within_days, strike_count)
 
+    def get_week_chains(self, ticker: str, max_days: int = 8, max_expiries: int = 6,
+                        strike_count: Optional[int] = None):
+        """Synthetic daily expiries (today + next trading sessions) for the Daily Map."""
+        out = []
+        for expiry in _next_days(max_expiries):
+            rows, spot = self.get_chain(ticker, expiry, strike_count)
+            out.append((expiry, rows, spot))
+        return out
+
     def daily_history(self, ticker: str, days: int) -> List[Candle]:
         """Deterministic synthetic daily candles with a realistic ADR + a clear
         widest session, so the range filter works offline / in CI."""

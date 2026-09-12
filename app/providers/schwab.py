@@ -178,6 +178,25 @@ class SchwabChainClient:
         """Backward-compatible alias for the nearest (week 0) expiry."""
         return self.get_weekly_chain(ticker, 0, within_days, strike_count)
 
+    def get_week_chains(self, ticker: str, max_days: int = 8, max_expiries: int = 6,
+                        strike_count: Optional[int] = None
+                        ) -> List[Tuple[str, List[StrikeRow], Optional[float]]]:
+        """Every expiry within ``max_days`` (the week's daily expiries) in ONE call.
+
+        Returns [(expiry, rows, spot), …] for the Daily Map.
+        """
+        sc = strike_count or settings.strike_count
+        today = dt.date.today()
+        end = today + dt.timedelta(days=max_days)
+        data = self._chains_raw(ticker, today.isoformat(), end.isoformat(), strike_count=sc)
+        if not data:
+            return []
+        spot = self._spot_from(data)
+        out = []
+        for expiry in self._expiries_in(data)[:max_expiries]:
+            out.append((expiry, self._rows_for_expiry(data, expiry), spot))
+        return out
+
     def daily_history(self, symbol: str, days: int) -> List[Candle]:
         """Last ``days`` completed daily candles (for range stats).
 

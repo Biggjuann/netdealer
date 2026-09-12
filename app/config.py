@@ -92,6 +92,9 @@ class Settings:
     strike_count: int = field(default_factory=lambda: _int("STRIKE_COUNT", 80))
     # How far out (days) to look when listing available expirations.
     expiry_horizon_days: int = field(default_factory=lambda: _int("EXPIRY_HORIZON_DAYS", 60))
+    # Daily Map: how many calendar days / expiries to chart across the week.
+    map_max_days: int = field(default_factory=lambda: _int("MAP_MAX_DAYS", 8))
+    map_max_expiries: int = field(default_factory=lambda: _int("MAP_MAX_EXPIRIES", 6))
 
     # ----- Scanner ---------------------------------------------------------
     # Symbols the fast scanner sweeps. Defaults to the curated LIQUID list;

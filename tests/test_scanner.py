@@ -123,6 +123,17 @@ def test_scan_ranks_by_confidence():
     print(f"ok  scan ranked by confidence (best first); top conf={d['results'][0]['confidence']}")
 
 
+def test_week_chains_for_daily_map():
+    prov = MockChainProvider()
+    chains = prov.get_week_chains("QQQ", max_days=8, max_expiries=6)
+    assert len(chains) == 6, "daily map should return the week's daily expiries"
+    exps = [e for (e, _r, _s) in chains]
+    assert exps == sorted(exps), "expiries must be in chronological order"
+    for expiry, rows, spot in chains:
+        assert rows and spot, f"{expiry} should have a chain + spot"
+    print(f"ok  week chains: {len(chains)} daily expiries {exps[0]}..{exps[-1]}")
+
+
 def test_run_scan_cache():
     prov = MockChainProvider()
     tickers = ["NVDA", "AAPL"]
