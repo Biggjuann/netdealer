@@ -5,7 +5,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.market_calendar import is_trading_day, market_holidays, sessions_to_expiry
+from app.market_calendar import (close_hour_et, is_early_close, is_trading_day,
+                                  market_holidays, sessions_to_expiry)
 
 
 def test_known_2026_holidays():
@@ -42,6 +43,20 @@ def test_sessions_skip_holiday():
     # Day before Thanksgiving (Wed Nov 25) -> Fri Nov 27 = 1 session (Thu is holiday)
     assert sessions_to_expiry(dt.date(2026, 11, 27), dt.date(2026, 11, 25)) == 1
     print("ok  session counts skip holidays (Labor Day, Thanksgiving)")
+
+
+def test_early_close_half_days():
+    # Friday after Thanksgiving 2026 (Nov 27) is a 1:00pm ET half-day.
+    assert is_early_close(dt.date(2026, 11, 27))
+    assert close_hour_et(dt.date(2026, 11, 27)) == 13
+    # Christmas Eve 2026 (Thu Dec 24) is a weekday half-day.
+    assert is_early_close(dt.date(2026, 12, 24))
+    # A normal session closes at 16:00 and is not an early close.
+    assert not is_early_close(dt.date(2026, 9, 22))
+    assert close_hour_et(dt.date(2026, 9, 22)) == 16
+    # A full holiday is not an "early close" (it's shut).
+    assert not is_early_close(dt.date(2026, 11, 26))   # Thanksgiving
+    print("ok  early-close half-days (Thanksgiving Fri, Christmas Eve) at 13:00 ET")
 
 
 def main():

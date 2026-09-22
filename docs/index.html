@@ -336,7 +336,7 @@
   <div id="spxView" style="display:none">
     <div class="scanbar">
       <button id="spxBtn" class="go">Read setup</button>
-      <div class="sum" id="spxSum">Today's <b>0DTE SPX</b> plan — reads the dealer map off <b>SPY</b> (real OI), then translates it onto the live <b>$SPX</b> ladder to pick the contract. Hit <b>Read setup</b>.</div>
+      <div class="sum" id="spxSum">The <b>EOD Pin</b> — inside the final <b>15 min</b> of RTH: ceiling &amp; C below → <b>ATM put</b>, floor &amp; C above → <b>ATM call</b>, held to the 4:00pm cash settlement. Reads the map off <b>SPY</b>, trades the live <b>$SPX</b>. Hit <b>Read setup</b>.</div>
     </div>
 
     <div id="spxTicket" style="display:none">
@@ -351,9 +351,9 @@
           <div class="d" id="spxActD" style="font-size:11px;color:var(--dim)"></div>
         </div>
         <div class="conf">
-          <div class="lbl">Setup confidence</div>
-          <div class="big" id="spxConf">—</div>
-          <div class="d" id="spxExp" style="font-size:11px;color:var(--dim)"></div>
+          <div class="lbl" id="spxClockLbl">Arm window</div>
+          <div class="big" id="spxClock">—</div>
+          <div class="d" id="spxClockD" style="font-size:11px;color:var(--dim)"></div>
         </div>
       </div>
 
@@ -369,19 +369,20 @@
       </div>
 
       <div class="panel">
-        <h3>Trade plan</h3>
-        <p class="hint"><b>C</b> is the pin/target, the <b>sweet spot</b> is the crush zone,
-          and the <b>wall</b> is the invalidation — a reclaim through it says the pull failed.
-          Also cap risk at a hard <b>−<span id="spxStopPct">50</span>%</b> of premium.</p>
+        <h3>Trade plan — ATM, held to settlement</h3>
+        <p class="hint"><b>C</b> is the pin/target. The position is held to the cash
+          settlement (no stop), so max risk is the <b>whole premium</b> if the pin misses — the
+          <b>reachability</b> read below is the guardrail: the further C sits beyond the 1σ move
+          left to the close, the lower the odds it fully pins.</p>
         <div class="planbar" id="spxPlan"></div>
         <div class="hint" id="spxRR" style="margin:8px 0 0"></div>
       </div>
 
       <div class="panel">
-        <h3>SPX contracts <span style="color:var(--dim);text-transform:none;letter-spacing:0">— cash-settled .SPXW, projected value if price pins to C</span></h3>
-        <p class="hint">Three ways to express the same directional thesis. <b>Value at C</b> = the
-          contract's intrinsic value if price finishes at the C pin; <b>%</b> is the gain from the
-          live ask. Liquidity shown as live <b>volume</b> (SPX 0DTE carries no resting OI).</p>
+        <h3>The contract <span style="color:var(--dim);text-transform:none;letter-spacing:0">— strictly ATM, cash-settled .SPXW</span></h3>
+        <p class="hint"><b>Value at C</b> = the contract's intrinsic value if price finishes at the
+          C pin; <b>%</b> is the gain from the live ask. Liquidity shown as live <b>volume</b>
+          (SPX 0DTE carries no resting OI).</p>
         <div class="ctcards" id="spxCts"></div>
       </div>
 
@@ -885,20 +886,26 @@ async function runSpx(){
 }
 function renderSpx(d){
   $("spxTicket").style.display="";
-  const L=d.levels||{}, P=d.plan||{}, isPut=d.side==="PUT";
-  const dteTxt = d.sessions===0 ? "0DTE (today)" : (d.sessions!=null?d.sessions+"DTE":"—");
-  $("spxSum").innerHTML = `<b>$SPX</b> ${fmt(L.spot)} · exp <b>${d.expiry}</b> (${dteTxt}) · `
+  const L=d.levels||{}, P=d.plan||{}, E=d.eod||{}, isPut=d.side==="PUT";
+  $("spxSum").innerHTML = `<b>$SPX</b> ${fmt(L.spot)} · exp <b>${d.expiry}</b> (0DTE) · `
     + `<span style="color:var(--muted)">${(d.mode||"").toUpperCase()}</span> · SPY map spot ${fmt(d.spy&&d.spy.spot)}`;
 
-  // Banner
+  // Banner — signal driven by the clock (arm window) then the setup.
   const sig=(d.signal||"").toUpperCase();
-  const cls = sig==="GO"?"go":(sig==="CAUTION"?"caution":"stand");
+  const cls = sig==="TAKE"?"go":(sig==="WAIT"?"caution":"stand");
   $("spxBanner").className="sigbanner "+cls;
   $("spxSig").textContent=d.signal||"—";
   const act=$("spxAct"); act.textContent=d.action||"—"; act.className="act "+(isPut?"put":"call");
-  $("spxActD").textContent = d.side ? `${d.side}s · price pulled toward C` : "";
-  $("spxConf").textContent = d.confidence!=null?Math.round(d.confidence):"—";
-  $("spxExp").innerHTML = L.em!=null?`1σ ≈ ±${fmt(L.em,1)} pt to close`:"";
+  const armed = !!E.armed;
+  $("spxActD").textContent = armed ? "held to the cash settlement" : "prospective — not armed yet";
+
+  // Clock / arm-window readout
+  const mtc=E.minutes_to_close;
+  if(!E.trading_day){ $("spxClock").textContent="CLOSED"; $("spxClockD").textContent="market is closed today"; }
+  else if(E.after_close){ $("spxClock").textContent="CLOSED"; $("spxClockD").textContent=`session ended (${E.now_et})`; }
+  else if(armed){ $("spxClock").innerHTML=`<span style="color:var(--green)">ARMED</span>`; $("spxClockD").textContent=`${fmt(mtc,0)} min to ${E.close_et} · ${E.now_et}`; }
+  else { $("spxClock").textContent = E.arms_in_min!=null?`${fmt(E.arms_in_min,0)}m`:"—"; $("spxClockD").textContent=`until the ${d.arm_minutes||15}-min arm window · ${E.now_et}`; }
+  $("spxClockLbl").textContent = armed ? "Arm window · live" : "Arms in";
 
   // Why / warnings chips
   const why=$("spxWhy"); why.innerHTML="";
@@ -910,29 +917,30 @@ function renderSpx(d){
   const lv=$("spxLvls"); lv.innerHTML="";
   const cell=(k,v,d2,extra)=>`<div class="lvl ${extra||""}"><div class="k">${k}</div><div class="v mono">${v}</div><div class="d">${d2||""}</div></div>`;
   lv.innerHTML =
-    cell("Spot","<span class='mono'>"+fmt(L.spot)+"</span>","live index")
+    cell("Spot",fmt(L.spot),"live index")
     + cell("C · target",fmt(L.c),"net-dealer pin","c")
     + cell("Sweet spot",`${fmt(L.sweet_low)}–${fmt(L.sweet_high)}`,"crush zone")
-    + cell("Call wall",fmt(L.call_wall),"dealers short ↑","up")
-    + cell("Put wall",fmt(L.put_wall),"dealers long ↓","dn")
+    + cell("Call wall",fmt(L.call_wall),"ceiling ↑","up")
+    + cell("Put wall",fmt(L.put_wall),"floor ↓","dn")
     + cell("Max pain",fmt(L.max_pain),"min payout");
 
-  // Plan bar
+  // Plan bar — entry / target(C) / exit(settle) / max risk
   const seg=(k,v,d2)=>`<div class="seg"><div class="k">${k}</div><div class="v mono">${v}</div><div class="d" style="font-size:10px;color:var(--dim)">${d2||""}</div></div>`;
-  $("spxStopPct").textContent = P.premium_stop_pct!=null?P.premium_stop_pct:50;
   $("spxPlan").innerHTML =
-    seg("Entry",fmt(P.entry),"live")
-    + seg("Target 1 · C",fmt(P.target1),"the pin")
-    + seg("Target 2",fmt(P.target2),"far crush edge")
-    + seg("Stop",fmt(P.stop),isPut?"reclaim call wall":"lose put wall");
-  const edgeTxt = P.edge_pts!=null ? `${P.edge_pts>0?"":"no "}room to C: <b>${fmt(Math.abs(P.edge_pts),1)}</b> pt` : "";
-  $("spxRR").innerHTML = `Reward <b>${fmt(P.reward_pts,1)}</b> pt · Risk <b>${fmt(P.risk_pts,1)}</b> pt · `
-    + `R:R <b style="color:var(--teal)">${P.rr!=null?P.rr:"—"}</b> · ${edgeTxt}`;
+    seg("Entry",fmt(P.entry),"ATM ask now")
+    + seg("Target · C",fmt(P.target),"the pin")
+    + seg("Exit",P.exit||"—","cash settlement")
+    + seg("Max risk","100%","premium, no stop");
+  const reachTxt = d.reach_sigma!=null
+    ? `Reachability: C is <b style="color:${d.reachable?'var(--green)':'var(--amber)'}">${d.reach_sigma}×</b> the 1σ move to close (±${fmt(L.em,1)} pt) — ${d.reachable?"reachable":"a stretch"}`
+    : "Reachability: —";
+  const edgeTxt = P.edge_pts!=null ? ` · ${P.edge_pts>0?"":"no "}room to C: <b>${fmt(Math.abs(P.edge_pts),1)}</b> pt` : "";
+  $("spxRR").innerHTML = reachTxt + edgeTxt;
 
-  // Contracts
+  // The contract (strictly ATM)
   const ct=$("spxCts"); ct.innerHTML="";
   if(!(d.contracts||[]).length){
-    ct.innerHTML=`<div class="hint">No liquid SPX contract finishes ITM at C on the ${d.side||"—"} side right now.</div>`;
+    ct.innerHTML=`<div class="hint">No ATM ${d.side||""} contract available on the live SPX chain right now.</div>`;
   }
   (d.contracts||[]).forEach(c=>{
     const el=document.createElement("div"); el.className="ctcard "+(c.side==="PUT"?"put":"call");
@@ -940,17 +948,17 @@ function renderSpx(d){
       `<div class="role">${c.role}</div>`
       + `<div class="sym">${c.symbol}</div>`
       + `<div class="row"><span>Strike</span><b>${fmt(c.strike,0)} ${c.side}</b></div>`
-      + `<div class="row"><span>Ask</span><b>$${fmt(c.premium)}</b></div>`
+      + `<div class="row"><span>Ask (entry)</span><b>$${fmt(c.premium)}</b></div>`
       + `<div class="row"><span>Value at C</span><b>$${fmt(c.value_at_c)}</b></div>`
-      + `<div class="row"><span>Gain if C hits</span><span class="g">+${(c.est_gain_pct*100).toFixed(0)}%</span></div>`
+      + `<div class="row"><span>Gain if C prints</span><span class="g">+${(c.est_gain_pct*100).toFixed(0)}%</span></div>`
       + `<div class="row"><span>Breakeven</span><b>${fmt(c.breakeven)}</b></div>`
       + `<div class="row"><span>Volume</span><b>${fmtInt(c.volume)}</b></div>`;
     ct.appendChild(el);
   });
 
-  $("spxFoot").innerHTML = `As of ${d.asof||""} · Map from SPY OI, contracts from live $SPX. `
-    + `SPX is cash-settled, European-style, no early assignment. This is a read-only trade plan — `
-    + `the app never routes orders. <b>Not financial advice.</b>`;
+  $("spxFoot").innerHTML = `As of ${d.asof||""} · Rule: final ${d.arm_minutes||15} min only, strictly ATM, held to `
+    + `${E.close_et||"4:00 ET"} settlement. Map from SPY OI, contract from live $SPX. SPX is cash-settled, `
+    + `European-style, no early assignment. Read-only trade plan — the app never routes orders. <b>Not financial advice.</b>`;
 }
 
 function reachBadge(conf){
