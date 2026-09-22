@@ -134,6 +134,42 @@
   .reach.max{background:rgba(251,191,36,.16);color:var(--amber)}
   .reach.out{background:rgba(248,113,113,.16);color:var(--red)}
   .reach.na{background:rgba(126,138,163,.16);color:var(--muted)}
+  /* ---- 0DTE SPX trade ticket ---- */
+  .sigbanner{display:flex;align-items:center;gap:18px;flex-wrap:wrap;border-radius:18px;
+    padding:18px 22px;margin-bottom:16px;border:1px solid var(--line)}
+  .sigbanner.go{background:linear-gradient(90deg,rgba(52,211,153,.18),rgba(52,211,153,.03));border-color:rgba(52,211,153,.5)}
+  .sigbanner.caution{background:linear-gradient(90deg,rgba(251,191,36,.16),rgba(251,191,36,.03));border-color:rgba(251,191,36,.5)}
+  .sigbanner.stand{background:linear-gradient(90deg,rgba(248,113,113,.15),rgba(248,113,113,.03));border-color:rgba(248,113,113,.45)}
+  .sigbanner .lbl{font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted);font-weight:800}
+  .sigbanner .sig{font-size:30px;font-weight:900;letter-spacing:.5px;line-height:1}
+  .sigbanner.go .sig{color:var(--green)} .sigbanner.caution .sig{color:var(--amber)} .sigbanner.stand .sig{color:var(--red)}
+  .sigbanner .act{font-size:22px;font-weight:900;letter-spacing:.5px}
+  .sigbanner .act.put{color:var(--red)} .sigbanner .act.call{color:var(--green)}
+  .sigbanner .conf{margin-left:auto;text-align:right}
+  .sigbanner .conf .big{font-size:30px;font-weight:900}
+  .whyrow{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+  .why{font-size:12px;padding:7px 12px;border-radius:10px;border:1px solid var(--line);background:var(--panel2)}
+  .why.good{border-color:rgba(52,211,153,.35);color:var(--green)}
+  .why.warn{border-color:rgba(251,191,36,.4);color:var(--amber)}
+  .lvlgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:16px}
+  .lvl{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px 13px}
+  .lvl .k{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)}
+  .lvl .v{font-size:20px;font-weight:800;margin-top:2px}
+  .lvl .d{font-size:10px;color:var(--dim);margin-top:1px}
+  .lvl.c .v{color:var(--pink)} .lvl.up .v{color:var(--red)} .lvl.dn .v{color:var(--green)}
+  .planbar{display:flex;gap:0;flex-wrap:wrap;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:8px}
+  .planbar .seg{flex:1;min-width:96px;padding:11px 14px;border-right:1px solid var(--line)}
+  .planbar .seg:last-child{border-right:none}
+  .planbar .k{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)}
+  .planbar .v{font-size:18px;font-weight:800;margin-top:2px}
+  .ctcards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+  .ctcard{border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:var(--panel)}
+  .ctcard.put{box-shadow:inset 3px 0 0 var(--red)} .ctcard.call{box-shadow:inset 3px 0 0 var(--green)}
+  .ctcard .role{font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);font-weight:800}
+  .ctcard .sym{font-family:ui-monospace,monospace;font-size:13px;font-weight:800;margin:4px 0 8px;color:var(--txt)}
+  .ctcard .row{display:flex;justify-content:space-between;font-size:12px;padding:2px 0;color:var(--muted)}
+  .ctcard .row b{color:var(--txt);font-weight:700}
+  .ctcard .g{color:var(--teal);font-weight:800}
 </style>
 </head>
 <body>
@@ -159,6 +195,7 @@
     <button class="tab active" id="tabCalc" data-view="calc">🎯 Calculator</button>
     <button class="tab" id="tabScan" data-view="scan">📡 Opportunity Scanner</button>
     <button class="tab" id="tabMap" data-view="map">🗺️ Daily Map</button>
+    <button class="tab" id="tabSpx" data-view="spx">⚡ 0DTE SPX</button>
   </div>
   <div id="msg"></div>
 
@@ -295,6 +332,62 @@
       </div>
     </div>
   </div><!-- /mapView -->
+
+  <div id="spxView" style="display:none">
+    <div class="scanbar">
+      <button id="spxBtn" class="go">Read setup</button>
+      <div class="sum" id="spxSum">Today's <b>0DTE SPX</b> plan — reads the dealer map off <b>SPY</b> (real OI), then translates it onto the live <b>$SPX</b> ladder to pick the contract. Hit <b>Read setup</b>.</div>
+    </div>
+
+    <div id="spxTicket" style="display:none">
+      <div class="sigbanner" id="spxBanner">
+        <div>
+          <div class="lbl">Signal</div>
+          <div class="sig" id="spxSig">—</div>
+        </div>
+        <div>
+          <div class="lbl">Action</div>
+          <div class="act" id="spxAct">—</div>
+          <div class="d" id="spxActD" style="font-size:11px;color:var(--dim)"></div>
+        </div>
+        <div class="conf">
+          <div class="lbl">Setup confidence</div>
+          <div class="big" id="spxConf">—</div>
+          <div class="d" id="spxExp" style="font-size:11px;color:var(--dim)"></div>
+        </div>
+      </div>
+
+      <div class="whyrow" id="spxWhy"></div>
+
+      <div class="panel">
+        <h3>SPX levels — translated from the SPY dealer map</h3>
+        <p class="hint">SPX same-day options show ~zero open interest intraday, so the crush /
+          walls / pin are read off <b>SPY</b> and mapped onto SPX with
+          <span class="mono">spx = spy×10 + basis</span> (<span id="spxBasis">—</span>). These are the
+          <b>tradeable</b> SPX prices. <b>Not financial advice.</b></p>
+        <div class="lvlgrid" id="spxLvls"></div>
+      </div>
+
+      <div class="panel">
+        <h3>Trade plan</h3>
+        <p class="hint"><b>C</b> is the pin/target, the <b>sweet spot</b> is the crush zone,
+          and the <b>wall</b> is the invalidation — a reclaim through it says the pull failed.
+          Also cap risk at a hard <b>−<span id="spxStopPct">50</span>%</b> of premium.</p>
+        <div class="planbar" id="spxPlan"></div>
+        <div class="hint" id="spxRR" style="margin:8px 0 0"></div>
+      </div>
+
+      <div class="panel">
+        <h3>SPX contracts <span style="color:var(--dim);text-transform:none;letter-spacing:0">— cash-settled .SPXW, projected value if price pins to C</span></h3>
+        <p class="hint">Three ways to express the same directional thesis. <b>Value at C</b> = the
+          contract's intrinsic value if price finishes at the C pin; <b>%</b> is the gain from the
+          live ask. Liquidity shown as live <b>volume</b> (SPX 0DTE carries no resting OI).</p>
+        <div class="ctcards" id="spxCts"></div>
+      </div>
+
+      <p class="hint" id="spxFoot" style="margin-top:2px"></p>
+    </div>
+  </div><!-- /spxView -->
 </main>
 
 <div class="modal" id="modal">
@@ -660,11 +753,14 @@ function showView(v){
   $("calcView").style.display = v==="calc" ? "" : "none";
   $("scanView").style.display = v==="scan" ? "" : "none";
   $("mapView").style.display = v==="map" ? "" : "none";
+  $("spxView").style.display = v==="spx" ? "" : "none";
   $("tabCalc").classList.toggle("active", v==="calc");
   $("tabScan").classList.toggle("active", v==="scan");
   $("tabMap").classList.toggle("active", v==="map");
+  $("tabSpx").classList.toggle("active", v==="spx");
   if(v==="scan" && !SCANNED) runScan();
   if(v==="map" && currentTicker() && MAP_TICKER!==currentTicker()) runMap();
+  if(v==="spx" && !SPX_LOADED) runSpx();
 }
 
 // ---- Daily Map ----
@@ -774,6 +870,89 @@ async function runScan(){
   }catch(e){ msg("Scan failed: "+e); }
   finally{ btn.disabled=false; btn.textContent=prev; }
 }
+// ---- 0DTE SPX trade ticket ----
+let SPX_LOADED = false;
+async function runSpx(){
+  const btn=$("spxBtn"); btn.disabled=true; const prev=btn.textContent; btn.textContent="Reading…";
+  $("spxSum").textContent="Reading today's SPX setup from the SPY dealer map…"; msg("");
+  try{
+    const r=await fetch(api("/api/spx-trade"));
+    const d=await r.json();
+    if(d.error){ msg("SPX setup failed: "+d.error); $("spxSum").textContent="SPX setup unavailable."; return; }
+    SPX_LOADED=true; renderSpx(d);
+  }catch(e){ msg("SPX setup failed: "+e); }
+  finally{ btn.disabled=false; btn.textContent=prev; }
+}
+function renderSpx(d){
+  $("spxTicket").style.display="";
+  const L=d.levels||{}, P=d.plan||{}, isPut=d.side==="PUT";
+  const dteTxt = d.sessions===0 ? "0DTE (today)" : (d.sessions!=null?d.sessions+"DTE":"—");
+  $("spxSum").innerHTML = `<b>$SPX</b> ${fmt(L.spot)} · exp <b>${d.expiry}</b> (${dteTxt}) · `
+    + `<span style="color:var(--muted)">${(d.mode||"").toUpperCase()}</span> · SPY map spot ${fmt(d.spy&&d.spy.spot)}`;
+
+  // Banner
+  const sig=(d.signal||"").toUpperCase();
+  const cls = sig==="GO"?"go":(sig==="CAUTION"?"caution":"stand");
+  $("spxBanner").className="sigbanner "+cls;
+  $("spxSig").textContent=d.signal||"—";
+  const act=$("spxAct"); act.textContent=d.action||"—"; act.className="act "+(isPut?"put":"call");
+  $("spxActD").textContent = d.side ? `${d.side}s · price pulled toward C` : "";
+  $("spxConf").textContent = d.confidence!=null?Math.round(d.confidence):"—";
+  $("spxExp").innerHTML = L.em!=null?`1σ ≈ ±${fmt(L.em,1)} pt to close`:"";
+
+  // Why / warnings chips
+  const why=$("spxWhy"); why.innerHTML="";
+  (d.reasons||[]).forEach(t=>{ const s=document.createElement("span"); s.className="why good"; s.textContent="✓ "+t; why.appendChild(s); });
+  (d.warnings||[]).forEach(t=>{ const s=document.createElement("span"); s.className="why warn"; s.textContent="⚠ "+t; why.appendChild(s); });
+
+  // Levels
+  $("spxBasis").textContent = `basis ${L.basis>=0?"+":""}${fmt(L.basis,1)}`;
+  const lv=$("spxLvls"); lv.innerHTML="";
+  const cell=(k,v,d2,extra)=>`<div class="lvl ${extra||""}"><div class="k">${k}</div><div class="v mono">${v}</div><div class="d">${d2||""}</div></div>`;
+  lv.innerHTML =
+    cell("Spot","<span class='mono'>"+fmt(L.spot)+"</span>","live index")
+    + cell("C · target",fmt(L.c),"net-dealer pin","c")
+    + cell("Sweet spot",`${fmt(L.sweet_low)}–${fmt(L.sweet_high)}`,"crush zone")
+    + cell("Call wall",fmt(L.call_wall),"dealers short ↑","up")
+    + cell("Put wall",fmt(L.put_wall),"dealers long ↓","dn")
+    + cell("Max pain",fmt(L.max_pain),"min payout");
+
+  // Plan bar
+  const seg=(k,v,d2)=>`<div class="seg"><div class="k">${k}</div><div class="v mono">${v}</div><div class="d" style="font-size:10px;color:var(--dim)">${d2||""}</div></div>`;
+  $("spxStopPct").textContent = P.premium_stop_pct!=null?P.premium_stop_pct:50;
+  $("spxPlan").innerHTML =
+    seg("Entry",fmt(P.entry),"live")
+    + seg("Target 1 · C",fmt(P.target1),"the pin")
+    + seg("Target 2",fmt(P.target2),"far crush edge")
+    + seg("Stop",fmt(P.stop),isPut?"reclaim call wall":"lose put wall");
+  const edgeTxt = P.edge_pts!=null ? `${P.edge_pts>0?"":"no "}room to C: <b>${fmt(Math.abs(P.edge_pts),1)}</b> pt` : "";
+  $("spxRR").innerHTML = `Reward <b>${fmt(P.reward_pts,1)}</b> pt · Risk <b>${fmt(P.risk_pts,1)}</b> pt · `
+    + `R:R <b style="color:var(--teal)">${P.rr!=null?P.rr:"—"}</b> · ${edgeTxt}`;
+
+  // Contracts
+  const ct=$("spxCts"); ct.innerHTML="";
+  if(!(d.contracts||[]).length){
+    ct.innerHTML=`<div class="hint">No liquid SPX contract finishes ITM at C on the ${d.side||"—"} side right now.</div>`;
+  }
+  (d.contracts||[]).forEach(c=>{
+    const el=document.createElement("div"); el.className="ctcard "+(c.side==="PUT"?"put":"call");
+    el.innerHTML =
+      `<div class="role">${c.role}</div>`
+      + `<div class="sym">${c.symbol}</div>`
+      + `<div class="row"><span>Strike</span><b>${fmt(c.strike,0)} ${c.side}</b></div>`
+      + `<div class="row"><span>Ask</span><b>$${fmt(c.premium)}</b></div>`
+      + `<div class="row"><span>Value at C</span><b>$${fmt(c.value_at_c)}</b></div>`
+      + `<div class="row"><span>Gain if C hits</span><span class="g">+${(c.est_gain_pct*100).toFixed(0)}%</span></div>`
+      + `<div class="row"><span>Breakeven</span><b>${fmt(c.breakeven)}</b></div>`
+      + `<div class="row"><span>Volume</span><b>${fmtInt(c.volume)}</b></div>`;
+    ct.appendChild(el);
+  });
+
+  $("spxFoot").innerHTML = `As of ${d.asof||""} · Map from SPY OI, contracts from live $SPX. `
+    + `SPX is cash-settled, European-style, no early assignment. This is a read-only trade plan — `
+    + `the app never routes orders. <b>Not financial advice.</b>`;
+}
+
 function reachBadge(conf){
   if(conf==="within-mean") return `<span class="reach mean" title="move to C is within the 30d MEAN daily range">MEAN</span>`;
   if(conf==="within-max")  return `<span class="reach max" title="within the 30d MAX (widest) daily range, above the mean">MAX</span>`;
@@ -866,7 +1045,9 @@ $("expirySel").addEventListener("change",()=>{ if($("expirySel").value) calculat
 $("tabCalc").addEventListener("click",()=>showView("calc"));
 $("tabScan").addEventListener("click",()=>showView("scan"));
 $("tabMap").addEventListener("click",()=>showView("map"));
+$("tabSpx").addEventListener("click",()=>showView("spx"));
 $("mapBtn").addEventListener("click",runMap);
+$("spxBtn").addEventListener("click",runSpx);
 $("scanBtn").addEventListener("click",runScan);
 $("scanRange").addEventListener("change",()=>{ if(SCANNED) runScan(); });
 $("scanDte").addEventListener("change",()=>{ if(SCANNED) runScan(); });
