@@ -170,6 +170,20 @@
   .ctcard .row{display:flex;justify-content:space-between;font-size:12px;padding:2px 0;color:var(--muted)}
   .ctcard .row b{color:var(--txt);font-weight:700}
   .ctcard .g{color:var(--teal);font-weight:800}
+  .logbar{display:flex;align-items:center;gap:12px;margin-top:14px;flex-wrap:wrap}
+  .logbar label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:inline-flex;align-items:center;gap:6px}
+  .logbar input{width:66px}
+  /* ---- Journal ---- */
+  #jTable input{width:92px;padding:5px 7px}
+  #jTable td,#jTable th{white-space:nowrap}
+  #jTable tbody tr{cursor:default}
+  #jTable tbody tr:hover{background:transparent}
+  .jwin{color:var(--green);font-weight:800} .jloss{color:var(--red);font-weight:800}
+  .jopen{color:var(--amber);font-weight:700} .jclosed{color:var(--muted)}
+  .jbtn{cursor:pointer;font-size:11px;font-weight:700;border-radius:7px;padding:5px 9px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)}
+  .jbtn.settle{border-color:rgba(52,211,153,.4);color:var(--green)}
+  .jbtn.del{border-color:rgba(248,113,113,.35);color:var(--red)}
+  .jsym{font-family:ui-monospace,monospace;font-weight:800;font-size:12px}
 </style>
 </head>
 <body>
@@ -196,6 +210,7 @@
     <button class="tab" id="tabScan" data-view="scan">📡 Opportunity Scanner</button>
     <button class="tab" id="tabMap" data-view="map">🗺️ Daily Map</button>
     <button class="tab" id="tabSpx" data-view="spx">⚡ 0DTE SPX</button>
+    <button class="tab" id="tabJournal" data-view="journal">📓 Journal</button>
   </div>
   <div id="msg"></div>
 
@@ -384,11 +399,47 @@
           C pin; <b>%</b> is the gain from the live ask. Liquidity shown as live <b>volume</b>
           (SPX 0DTE carries no resting OI).</p>
         <div class="ctcards" id="spxCts"></div>
+        <div class="logbar" id="spxLogBar" style="display:none">
+          <label>Qty <input type="number" id="spxQty" min="1" step="1" value="1"></label>
+          <button class="go" id="spxLogBtn">📓 Log this trade</button>
+          <span class="hint" id="spxLogMsg" style="margin:0"></span>
+        </div>
       </div>
 
       <p class="hint" id="spxFoot" style="margin-top:2px"></p>
     </div>
   </div><!-- /spxView -->
+
+  <div id="journalView" style="display:none">
+    <div class="scanbar">
+      <div class="sum" id="jSum">Your logged trades &amp; realized P&amp;L — <b>saved on this device</b> (this browser). Log a trade from the <b>0DTE SPX</b> ticket, then mark it settled here to score it.</div>
+      <div style="display:flex;gap:8px">
+        <button class="gear" id="jExport">Export CSV</button>
+        <button class="gear" id="jClear">Clear all</button>
+      </div>
+    </div>
+
+    <div class="lvlgrid" id="jScore" style="margin-bottom:16px"></div>
+
+    <div class="panel">
+      <h3>Trade log</h3>
+      <p class="hint">Open trades: enter the <b>SPX settlement price</b> (the 4:00pm print) and hit
+        <b>Settle</b> — for a 0DTE held to close the option is worth its intrinsic at that price, so
+        P&amp;L = (settle intrinsic − entry) × 100 × qty. SPX options are ×100 per point.
+        Data lives only in this browser (a later update can sync it server-side).</p>
+      <div style="overflow-x:auto">
+        <table class="scan" id="jTable">
+          <thead><tr>
+            <th class="l">Logged</th><th class="l">Contract</th><th>Side</th><th>Entry $</th>
+            <th>Qty</th><th>Target C</th><th>Spot@entry</th><th>Status</th>
+            <th>Settle / exit</th><th>P&amp;L $</th><th>P&amp;L %</th><th></th>
+          </tr></thead>
+          <tbody id="jBody"></tbody>
+        </table>
+      </div>
+      <div class="skips" id="jEmpty"></div>
+    </div>
+  </div><!-- /journalView -->
 </main>
 
 <div class="modal" id="modal">
@@ -755,13 +806,16 @@ function showView(v){
   $("scanView").style.display = v==="scan" ? "" : "none";
   $("mapView").style.display = v==="map" ? "" : "none";
   $("spxView").style.display = v==="spx" ? "" : "none";
+  $("journalView").style.display = v==="journal" ? "" : "none";
   $("tabCalc").classList.toggle("active", v==="calc");
   $("tabScan").classList.toggle("active", v==="scan");
   $("tabMap").classList.toggle("active", v==="map");
   $("tabSpx").classList.toggle("active", v==="spx");
+  $("tabJournal").classList.toggle("active", v==="journal");
   if(v==="scan" && !SCANNED) runScan();
   if(v==="map" && currentTicker() && MAP_TICKER!==currentTicker()) runMap();
   if(v==="spx" && !SPX_LOADED) runSpx();
+  if(v==="journal") renderJournal();
 }
 
 // ---- Daily Map ----
@@ -884,8 +938,10 @@ async function runSpx(){
   }catch(e){ msg("SPX setup failed: "+e); }
   finally{ btn.disabled=false; btn.textContent=prev; }
 }
+let SPX_LAST = null;
 function renderSpx(d){
   $("spxTicket").style.display="";
+  SPX_LAST = d;
   const L=d.levels||{}, P=d.plan||{}, E=d.eod||{}, isPut=d.side==="PUT";
   $("spxSum").innerHTML = `<b>$SPX</b> ${fmt(L.spot)} · exp <b>${d.expiry}</b> (0DTE) · `
     + `<span style="color:var(--muted)">${(d.mode||"").toUpperCase()}</span> · SPY map spot ${fmt(d.spy&&d.spy.spot)}`;
@@ -956,9 +1012,126 @@ function renderSpx(d){
     ct.appendChild(el);
   });
 
+  // Log bar — enabled whenever there's a contract to record.
+  const hasCt = (d.contracts||[]).length>0;
+  $("spxLogBar").style.display = hasCt ? "" : "none";
+  $("spxLogMsg").textContent = "";
+
   $("spxFoot").innerHTML = `As of ${d.asof||""} · Rule: final ${d.arm_minutes||15} min only, strictly ATM, held to `
     + `${E.close_et||"4:00 ET"} settlement. Map from SPY OI, contract from live $SPX. SPX is cash-settled, `
     + `European-style, no early assignment. Read-only trade plan — the app never routes orders. <b>Not financial advice.</b>`;
+}
+
+// ---- Journal (device-local; swap Journal._load/_save for a server call later) ----
+const SPX_POINT_USD = 100;        // SPX option multiplier: $100 per point
+const Journal = {
+  KEY: "netdealer_journal_v1",
+  _load(){ try{ return JSON.parse(localStorage.getItem(this.KEY)) || []; }catch(e){ return []; } },
+  _save(rows){ try{ localStorage.setItem(this.KEY, JSON.stringify(rows)); }catch(e){} },
+  all(){ return this._load(); },
+  add(rec){ const r=this._load(); r.unshift(rec); this._save(r); return rec; },
+  patch(id, p){ const r=this._load(); const i=r.findIndex(x=>x.id===id); if(i>=0){ r[i]={...r[i],...p}; this._save(r); } return r[i]; },
+  remove(id){ this._save(this._load().filter(x=>x.id!==id)); },
+  clear(){ this._save([]); },
+};
+
+function logCurrentTrade(){
+  const d=SPX_LAST; const c=d&&(d.contracts||[])[0];
+  if(!c){ $("spxLogMsg").textContent="Nothing to log — read a setup with a contract first."; return; }
+  const qty=Math.max(1, parseInt($("spxQty").value,10)||1);
+  const rec={
+    id: "t"+Date.now()+Math.floor(Math.random()*1e4),
+    ts: new Date().toISOString(),
+    underlying: "SPX", side: c.side, strike: c.strike, symbol: c.symbol, expiry: d.expiry,
+    entry: c.premium, qty, target_c: (d.levels||{}).c, spot_entry: (d.levels||{}).spot,
+    signal: d.signal, status: "open", settle: null, exit: null, pnl: null, pnl_pct: null,
+  };
+  Journal.add(rec);
+  $("spxLogMsg").innerHTML = `Logged <b>${c.symbol}</b> ×${qty} → see 📓 Journal`;
+}
+
+function settleTrade(id, settleStr){
+  const s=parseFloat(settleStr);
+  if(!(s>0)){ alert("Enter the SPX settlement price (the 4:00pm index print)."); return; }
+  const r=Journal.all().find(x=>x.id===id); if(!r) return;
+  const intrinsic = r.side==="PUT" ? Math.max(r.strike-s,0) : Math.max(s-r.strike,0);
+  const pnl = (intrinsic - r.entry) * SPX_POINT_USD * r.qty;
+  Journal.patch(id, {status:"closed", settle:s, exit:+intrinsic.toFixed(2),
+                     pnl:+pnl.toFixed(2), pnl_pct: r.entry>0 ? (intrinsic-r.entry)/r.entry : null});
+  renderJournal();
+}
+function reopenTrade(id){ Journal.patch(id,{status:"open",settle:null,exit:null,pnl:null,pnl_pct:null}); renderJournal(); }
+function removeTrade(id){ Journal.remove(id); renderJournal(); }
+function clearJournal(){ if(confirm("Delete ALL logged trades on this device? This cannot be undone.")){ Journal.clear(); renderJournal(); } }
+
+function renderJournal(){
+  const rows=Journal.all();
+  const closed=rows.filter(r=>r.status==="closed");
+  const open=rows.filter(r=>r.status==="open");
+  const wins=closed.filter(r=>r.pnl>0), losses=closed.filter(r=>r.pnl<=0);
+  const sum=a=>a.reduce((t,r)=>t+(r.pnl||0),0);
+  const total=sum(closed);
+  const avgWin= wins.length? sum(wins)/wins.length : 0;
+  const avgLoss= losses.length? sum(losses)/losses.length : 0;
+  const winRate= closed.length? wins.length/closed.length*100 : null;
+  const expectancy= closed.length? total/closed.length : null;
+  const money=(x,dp=0)=>(x==null||isNaN(x))?"—":(x<0?"-$":"$")+Math.abs(x).toLocaleString(undefined,{minimumFractionDigits:dp,maximumFractionDigits:dp});
+  const tile=(k,v,d2,cls)=>`<div class="lvl"><div class="k">${k}</div><div class="v mono ${cls||''}">${v}</div><div class="d">${d2||""}</div></div>`;
+  $("jScore").innerHTML =
+    tile("Realized P&L", money(total,0), `${closed.length} closed`, total>0?"dn":(total<0?"up":""))
+    + tile("Win rate", winRate==null?"—":winRate.toFixed(0)+"%", `${wins.length}W / ${losses.length}L`)
+    + tile("Expectancy", expectancy==null?"—":money(expectancy,0), "avg / trade", expectancy>0?"dn":(expectancy<0?"up":""))
+    + tile("Avg win", money(avgWin,0), "closed winners", "dn")
+    + tile("Avg loss", money(avgLoss,0), "closed losers", "up")
+    + tile("Open", String(open.length), "awaiting settle");
+
+  const body=$("jBody"); body.innerHTML="";
+  rows.forEach(r=>{
+    const tr=document.createElement("tr");
+    const when=new Date(r.ts).toLocaleString(undefined,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
+    const sideCls=r.side==="PUT"?"sidePut":"sideCall";
+    let settleCell, pnlCell, pnlPctCell, actions;
+    if(r.status==="open"){
+      settleCell=`<input type="number" step="0.01" id="set_${r.id}" placeholder="SPX close">`;
+      pnlCell=`<span class="jopen">open</span>`; pnlPctCell="—";
+      actions=`<button class="jbtn settle" data-act="settle" data-id="${r.id}">Settle</button> `
+             +`<button class="jbtn del" data-act="del" data-id="${r.id}">✕</button>`;
+    }else{
+      const cls=r.pnl>0?"jwin":"jloss";
+      settleCell=`${fmt(r.settle)} <span style="color:var(--dim)">→ $${fmt(r.exit)}</span>`;
+      pnlCell=`<span class="${cls}">${(r.pnl>0?"+":"")+money(r.pnl,0)}</span>`;
+      pnlPctCell=`<span class="${cls}">${r.pnl_pct==null?"—":(r.pnl_pct>0?"+":"")+(r.pnl_pct*100).toFixed(0)+"%"}</span>`;
+      actions=`<button class="jbtn" data-act="reopen" data-id="${r.id}">Reopen</button> `
+             +`<button class="jbtn del" data-act="del" data-id="${r.id}">✕</button>`;
+    }
+    tr.innerHTML =
+      `<td class="l" style="color:var(--muted)">${when}</td>`
+      + `<td class="l jsym">${r.symbol}</td>`
+      + `<td class="${sideCls}">${r.side}</td>`
+      + `<td>$${fmt(r.entry)}</td>`
+      + `<td>${r.qty}</td>`
+      + `<td>${fmt(r.target_c)}</td>`
+      + `<td>${fmt(r.spot_entry)}</td>`
+      + `<td class="${r.status==='open'?'jopen':'jclosed'}">${r.status}</td>`
+      + `<td>${settleCell}</td>`
+      + `<td>${pnlCell}</td>`
+      + `<td>${pnlPctCell}</td>`
+      + `<td>${actions}</td>`;
+    body.appendChild(tr);
+  });
+  $("jEmpty").textContent = rows.length ? "" : "No trades logged yet. Log one from the ⚡ 0DTE SPX ticket.";
+}
+
+function exportJournalCsv(){
+  const rows=Journal.all();
+  if(!rows.length){ alert("No trades to export."); return; }
+  const cols=["ts","underlying","symbol","side","strike","expiry","entry","qty","target_c","spot_entry","signal","status","settle","exit","pnl","pnl_pct"];
+  const esc=v=>{ v=(v==null?"":String(v)); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+  const csv=[cols.join(",")].concat(rows.map(r=>cols.map(c=>esc(r[c])).join(","))).join("\n");
+  const blob=new Blob([csv],{type:"text/csv"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download="netdealer_journal_"+new Date().toISOString().slice(0,10)+".csv";
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
 }
 
 function reachBadge(conf){
@@ -1054,8 +1227,24 @@ $("tabCalc").addEventListener("click",()=>showView("calc"));
 $("tabScan").addEventListener("click",()=>showView("scan"));
 $("tabMap").addEventListener("click",()=>showView("map"));
 $("tabSpx").addEventListener("click",()=>showView("spx"));
+$("tabJournal").addEventListener("click",()=>showView("journal"));
 $("mapBtn").addEventListener("click",runMap);
 $("spxBtn").addEventListener("click",runSpx);
+$("spxLogBtn").addEventListener("click",logCurrentTrade);
+$("jExport").addEventListener("click",exportJournalCsv);
+$("jClear").addEventListener("click",clearJournal);
+$("jBody").addEventListener("click",e=>{
+  const b=e.target.closest("[data-act]"); if(!b) return;
+  const id=b.getAttribute("data-id"), act=b.getAttribute("data-act");
+  if(act==="settle"){ const inp=$("set_"+id); settleTrade(id, inp&&inp.value); }
+  else if(act==="del"){ removeTrade(id); }
+  else if(act==="reopen"){ reopenTrade(id); }
+});
+$("jBody").addEventListener("keydown",e=>{
+  if(e.key==="Enter" && e.target.id && e.target.id.startsWith("set_")){
+    settleTrade(e.target.id.slice(4), e.target.value);
+  }
+});
 $("scanBtn").addEventListener("click",runScan);
 $("scanRange").addEventListener("change",()=>{ if(SCANNED) runScan(); });
 $("scanDte").addEventListener("change",()=>{ if(SCANNED) runScan(); });
