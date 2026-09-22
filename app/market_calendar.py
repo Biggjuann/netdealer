@@ -79,9 +79,32 @@ def market_holidays(year: int) -> Set[dt.date]:
     return h
 
 
+@lru_cache(maxsize=32)
+def early_close_days(year: int) -> Set[dt.date]:
+    """NYSE/Nasdaq 1:00pm ET half-days: the Friday after Thanksgiving, plus
+    July 3 and Christmas Eve when those fall on a weekday that is not itself a
+    full holiday."""
+    days = {_nth_weekday(year, 11, 3, 4) + _ONE}      # day after Thanksgiving (Fri)
+    hols = market_holidays(year)
+    for d in (dt.date(year, 7, 3), dt.date(year, 12, 24)):
+        if d.weekday() < 5 and d not in hols:
+            days.add(d)
+    return days
+
+
 def is_trading_day(d: dt.date) -> bool:
     """Weekday that is not a market holiday."""
     return d.weekday() < 5 and d not in market_holidays(d.year)
+
+
+def is_early_close(d: dt.date) -> bool:
+    """A 1:00pm ET half-session (still a trading day)."""
+    return is_trading_day(d) and d in early_close_days(d.year)
+
+
+def close_hour_et(d: dt.date) -> int:
+    """Regular-session close hour in ET: 13 on half-days, else 16."""
+    return 13 if is_early_close(d) else 16
 
 
 def sessions_to_expiry(expiry: dt.date, today: Optional[dt.date] = None) -> int:
