@@ -25,6 +25,7 @@ from app.net_dealer import compute, setup_confidence
 from app.providers.factory import build_provider
 from app.scanner import _range_for, classify_range, rank_contracts, run_scan
 from app.timeutil import t_years
+from app.trade_plan import assemble_plan
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -126,6 +127,76 @@ def net_dealer(ticker: str = Query(..., min_length=1),
 
 # Same-day / next-session scopes: (expiry slots to fetch, max trading sessions).
 _DTE_MAP = {"0": ([0], 0), "1": ([0, 1], 1)}
+
+# The SPX index option symbol Schwab recognises (the ETF SPY carries the OI map).
+SPX_SYMBOL = "$SPX"
+SPY_SYMBOL = "SPY"
+
+
+@app.get("/api/spx-trade")
+def spx_trade(expiry: str = Query("", description="0DTE expiry; blank = nearest (today)")
+              ) -> JSONResponse:
+    """A 0DTE SPX trade plan built from the SPY dealer map.
+
+    SPX same-day options report ~zero OI intraday, so the dealer signals (crush,
+    walls, pin) are read off SPY (real OI) and translated onto the live SPX
+    ladder; the tradeable contracts come from the live ``$SPX`` chain. Read-only
+    analysis — a plan and a signal, never an order.
+    """
+    try:
+        exp = expiry.strip()
+        if not exp:
+            exps = provider.get_expirations(SPY_SYMBOL)
+            if not exps:
+                return JSONResponse({"error": "no SPY expirations available"}, status_code=502)
+            exp = exps[0]
+        spy_rows, spy_spot = provider.get_chain(SPY_SYMBOL, exp, settings.strike_count)
+        spx_rows, spx_spot = provider.get_chain(SPX_SYMBOL, exp, settings.strike_count)
+    except Exception as exc:  # pragma: no cover - network
+        log.warning("spx-trade %s failed: %s", expiry, exc)
+        return JSONResponse({"error": f"chain fetch failed: {exc}"}, status_code=502)
+
+    if not spy_rows or not spy_spot:
+        return JSONResponse({"error": "SPY chain unavailable"}, status_code=502)
+    if not spx_rows or not spx_spot:
+        return JSONResponse({"error": "SPX chain unavailable"}, status_code=502)
+
+    ty, dte = t_years(exp)
+    spy = compute(SPY_SYMBOL, exp, spy_rows, spy_spot, ty, dte,
+                  r=settings.risk_free_rate, fallback_iv=settings.fallback_iv,
+                  volume_weight=settings.volume_weight, blend_mode=settings.blend_mode,
+                  blend_alpha=settings.blend_alpha)
+    if spy.c_target is None:
+        return JSONResponse({"error": "could not solve C on SPY"}, status_code=502)
+
+    # Fold real 30d reachability + top-pick liquidity into SPY's confidence so the
+    # gate matches what the Calculator/Scanner show for SPY.
+    try:
+        stats = _range_for(provider, SPY_SYMBOL)
+        rc, _m, _x = classify_range(abs(spy.c_target - spy_spot), spy_spot, dte, stats)
+        pside = "CALL" if spy.c_target > spy_spot else "PUT"
+        top = rank_contracts(spy_rows, spy.c_target, pside, min_gain=0.0, limit=1)
+        liq = top[0]["contract_oi"] if top else None
+        expensive_crush = (spy.call_crush_pct if spy.expensive_side == "CALL"
+                           else spy.put_crush_pct if spy.expensive_side == "PUT" else None)
+        score, breakdown = setup_confidence(spy.direction_agree, expensive_crush,
+                                            spy.pin_steepness, range_reach=rc,
+                                            iv_reach=spy.iv_reach, liquidity_oi=liq,
+                                            volume_agree=spy.volume_agree)
+        spy.confidence = score
+        spy.confidence_breakdown = breakdown
+    except Exception as exc:  # pragma: no cover - defensive
+        log.warning("spx-trade confidence upgrade failed: %s", exc)
+
+    try:
+        sess = sessions_to_expiry(dt.date.fromisoformat(exp))
+    except (ValueError, TypeError):
+        sess = None
+
+    plan = assemble_plan(spy, spy_spot, spx_rows, spx_spot, exp, dte, ty, sess,
+                         min_ask=settings.scan_min_ask,
+                         mode="live" if settings.live else "mock")
+    return JSONResponse(plan)
 
 
 @app.get("/api/weekly-map")

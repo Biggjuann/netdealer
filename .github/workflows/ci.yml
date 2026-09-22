@@ -39,6 +39,9 @@ jobs:
       - name: Run market-calendar tests
         run: python tests/test_calendar.py
 
+      - name: Run 0DTE SPX trade-plan tests
+        run: python tests/test_trade_plan.py
+
       - name: Smoke-test the app boots (mock mode)
         env:
           DATA_MODE: mock
