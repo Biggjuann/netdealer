@@ -63,14 +63,40 @@ def test_eod_state_arm_window():
     print(f"ok  arm window: armed@15:50, wait@13:00, closed@16:30, half-day {hd['close_et']}")
 
 
-def test_armed_down_crush_takes_atm_put():
+def test_armed_c_below_spot_takes_atm_put():
     p = _plan()
     assert p["side"] == "PUT" and p["action"] == "BUY ATM PUT"
     assert p["signal"] == "TAKE", p["warnings"]
     assert p["plan"]["target"] == to_spx(770.0, p["levels"]["basis"])
     assert p["plan"]["edge_pts"] > 0
-    assert "settle at" in p["plan"]["exit"]
-    print(f"ok  armed down-crush → TAKE BUY ATM PUT, target C={p['plan']['target']}")
+    assert "close at C" in p["plan"]["exit"]
+    print(f"ok  armed C<spot → TAKE BUY ATM PUT, target C={p['plan']['target']}")
+
+
+def test_side_follows_c_not_crush():
+    # The bug: SPY's crush read says UP, but C is BELOW spot. The pin target is
+    # C, so the side must be a PUT (ride DOWN to C) — never a CALL. The crush
+    # disagreement is flagged as a warning, not obeyed.
+    spy = _spy_map(crush_direction="UP", expensive_side="PUT", volume_bias="UP",
+                   c_target=770.0)                       # C below spot 773.4
+    p = _plan(spy=spy)
+    assert p["side"] == "PUT" and p["action"] == "BUY ATM PUT"
+    assert p["contracts"][0]["side"] == "PUT"
+    assert any("against the pin" in w for w in p["warnings"])
+    print("ok  side follows C-vs-spot (PUT) even when crush says UP; disagreement flagged")
+
+
+def test_wall_pin_matches_real_trade():
+    # Real setup: spot at the call wall 7775, C at 7766 → buy the 7775 PUT, ride
+    # to C, close at C. value at C = 7775 − 7766 = 9.
+    spy = _spy_map(c_target=772.5)                        # → c_spx 7766 at spx_spot 7775
+    p = _plan(spy=spy, spx_spot=7775.0)
+    assert p["side"] == "PUT" and p["levels"]["c"] == 7766.0
+    c = p["contracts"][0]
+    assert c["strike"] == 7775.0 and c["symbol"].endswith("P7775")
+    assert c["value_at_c"] == 9.0
+    assert "close at C" in p["plan"]["exit"]
+    print(f"ok  wall pin: {c['symbol']} valC={c['value_at_c']} exit='{p['plan']['exit']}'")
 
 
 def test_exactly_one_atm_contract():
@@ -89,30 +115,31 @@ def test_disarmed_outside_window():
     print("ok  disarmed: WAIT midday, CLOSED after 4pm, MARKET CLOSED on Saturday")
 
 
-def test_edge_exhausted_stands_down_when_armed():
-    # DOWN crush but C already at/above spot → no room; armed but no trade.
-    p = _plan(spy=_spy_map(c_target=774.0))
-    assert p["plan"]["edge_pts"] <= 0 and p["signal"] == "STAND DOWN"
-    print(f"ok  armed but edge exhausted → STAND DOWN (edge {p['plan']['edge_pts']})")
+def test_no_payoff_stands_down_when_armed():
+    # C only ~1 pt from spot → the ATM premium exceeds the intrinsic captured at
+    # C, so even a perfect pin loses → STAND DOWN.
+    p = _plan(spy=_spy_map(c_target=773.3))               # c_spx ≈ 7764, gap ≈ 1 pt
+    assert p["plan"]["payoff_at_c"] <= 0 and p["signal"] == "STAND DOWN"
+    print(f"ok  premium > gap → STAND DOWN (payoff {p['plan']['payoff_at_c']})")
 
 
-def test_up_crush_takes_atm_call():
+def test_c_above_spot_takes_atm_call():
     spy = _spy_map(crush_direction="UP", expensive_side="PUT", trade_side="CALL",
                    c_target=777.0, volume_bias="UP",
                    sweet_spot_low=773.4, sweet_spot_high=777.0)
     p = _plan(spy=spy, spx_spot=7735.0)
     assert p["side"] == "CALL" and p["action"] == "BUY ATM CALL" and p["signal"] == "TAKE"
     assert p["contracts"][0]["side"] == "CALL"
-    print(f"ok  armed up-crush → TAKE BUY ATM CALL, target C={p['plan']['target']}")
+    print(f"ok  C>spot → TAKE BUY ATM CALL, target C={p['plan']['target']}")
 
 
 def test_reachability_read():
     # Far C (big ceiling) → unreachable in the minutes left, warned but still armed.
     far = _plan(spy=_spy_map(c_target=770.0))            # ~34 pt to C
-    assert far["reachable"] is False and any("decay" in w for w in far["warnings"])
+    assert far["reachable"] is False and any("reach C" in w for w in far["warnings"])
     assert far["signal"] == "TAKE"                        # strict rule still fires
-    # Near C (small gap) → reachable, no decay warning.
-    near = _plan(spy=_spy_map(c_target=773.0))            # ~4 pt to C
+    # Near C (small gap, but big enough to beat premium) → reachable.
+    near = _plan(spy=_spy_map(c_target=772.0))            # ~14 pt to C
     assert near["reachable"] is True
     print(f"ok  reachability: far={far['reach_sigma']}σ (warn), near={near['reach_sigma']}σ (ok)")
 

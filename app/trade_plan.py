@@ -9,11 +9,12 @@ a small, live "basis" (index vs ETF), so we align SPY's levels onto the live
 SPX strike grid with ``spx = spy * 10 + basis`` before picking a contract.
 
 **The rule (EOD Pin).** Only inside the final ``ARM_MINUTES`` of the regular
-session: if SPY is pinned to the ceiling with C below → **buy the ATM PUT**; if
-it's on the floor with C above → **buy the ATM CALL**; hold to the 4:00pm cash
-settlement so price prints at C. Strictly ATM, no stop — max risk is the whole
-premium if the pin misses, so the arm window and reachability read are the
-guardrails. Outside the window the ticket is disarmed (WAIT / CLOSED).
+session, with the side set by C vs spot (the pin target): spot at the ceiling
+with C below → **buy the ATM PUT**; spot at the floor with C above → **buy the
+ATM CALL**; ride price to C and **close at C** (else let it settle at the bell).
+Strictly ATM, no stop — max risk is the whole premium, so the arm window, the
+payoff test (a perfect pin must beat the premium), and the reachability read are
+the guardrails. Outside the window the ticket is disarmed (WAIT / CLOSED).
 
 This is a **trade plan / signal**, not an order router — the app is read-only
 and never routes orders.
@@ -110,7 +111,7 @@ def _atm_contract(spx_rows, spx_spot: float, c_spx: float, side: str,
     strike = _nearest_strike(spx_rows, spx_spot)
     if strike is None:
         return None
-    return _contract(spx_rows, strike, side, c_spx, "ATM · held to close", expiry)
+    return _contract(spx_rows, strike, side, c_spx, "ATM · ride to C", expiry)
 
 
 def eod_state(now_utc: Optional[dt.datetime] = None) -> dict:
@@ -181,20 +182,22 @@ def assemble_plan(spy: NetDealerResult, spy_spot: float,
         "em": em,
     }
 
-    # Direction from the crush: DOWN crush (calls expensive, price at the ceiling)
-    # → dealers pull down → ATM PUT; UP crush (floor) → ATM CALL. Fall back to
-    # C-vs-spot if the crush read is blank.
-    crush = spy.crush_direction
-    if crush not in ("DOWN", "UP") and c_spx is not None:
-        crush = "UP" if c_spx > spx_spot else "DOWN"
-    side = "PUT" if crush == "DOWN" else "CALL"
-    action = "BUY ATM PUT" if side == "PUT" else "BUY ATM CALL"
-
-    # Edge = points from spot to the C pin in the trade's favour (positive = room
-    # to run). For a put that's ceiling→C (spot above C); for a call floor→C.
-    edge = None
+    # The trade targets the C pin, so the SIDE follows C vs spot — never the
+    # crush read. Ceiling (C below spot) → price pulled DOWN → ATM PUT; floor
+    # (C above spot) → ATM CALL. This is the user's rule, and it keeps the ATM
+    # contract finishing ITM at C. The crush is a *confirmation* only, surfaced
+    # as agreement below. (If C is unknown, fall back to the crush read.)
     if c_spx is not None:
-        edge = round((spx_spot - c_spx) if side == "PUT" else (c_spx - spx_spot), 2)
+        side = "PUT" if c_spx <= spx_spot else "CALL"
+    else:
+        side = "PUT" if spy.crush_direction == "DOWN" else "CALL"
+    action = "BUY ATM PUT" if side == "PUT" else "BUY ATM CALL"
+    pin_dir = "DOWN" if side == "PUT" else "UP"          # direction of the pull to C
+
+    # Edge = the gap from spot to the C pin (the intrinsic an ATM captures if
+    # price pins). Always ≥ 0 now that the side follows C; a near-zero gap means
+    # there is nothing to capture.
+    edge = round(abs(spx_spot - c_spx), 2) if c_spx is not None else None
 
     # Strictly the ATM contract, held to the settlement print.
     atm = _atm_contract(spx_rows, spx_spot, c_spx, side, expiry) if c_spx is not None else None
@@ -208,26 +211,31 @@ def assemble_plan(spy: NetDealerResult, spy_spot: float,
     # --- EOD-Pin gate: the trade is real only inside the arm window ---
     reasons: List[str] = []
     warnings: List[str] = []
-    if spy.crush_direction:
-        reasons.append(f"Crush {spy.crush_direction} — "
-                       f"{spy.expensive_side or '?'}s expensive; "
-                       f"{'ceiling, C below' if side == 'PUT' else 'floor, C above'}")
-    if spy.volume_agree:
-        reasons.append(f"Live volume skew agrees ({spy.volume_bias})")
-    elif spy.volume_agree is False:
-        warnings.append(f"Volume skew disagrees ({spy.volume_bias}) with the crush")
-    if spy.direction_agree is False:
-        warnings.append("Crush direction and C-vs-spot disagree")
-    if edge is not None and edge <= 0:
-        warnings.append("Price already at/through C — no room left to pin")
+    if edge is not None:
+        where = ("spot at the ceiling, C below" if side == "PUT"
+                 else "spot at the floor, C above")
+        reasons.append(f"{where} — {edge} pt to the C pin → {action} to ride to C")
+    # The crush is a confirmation of the pin direction, not the side selector.
+    if spy.crush_direction == pin_dir:
+        reasons.append(f"Crush {spy.crush_direction} confirms "
+                       f"({(spy.expensive_side or '?')}s expensive)")
+    elif spy.crush_direction:
+        warnings.append(f"Crush reads {spy.crush_direction}, against the pin — "
+                        f"dealer positioning does not confirm")
+    if spy.volume_agree is False:
+        warnings.append(f"Live volume skewing {spy.volume_bias}, against the pin")
+    if payoff is not None and payoff <= 0:
+        warnings.append("A perfect pin to C still loses — the ATM premium exceeds "
+                        "the gap to C; no edge here")
     if reach_sigma is not None:
         if reachable:
             reasons.append(f"C is {reach_sigma}× the 1σ move to close ({em} pt) — reachable")
         else:
             warnings.append(f"C is {reach_sigma}× the 1σ move to close ({em} pt) — "
-                            f"unlikely to fully pin; ATM can decay to $0")
+                            f"may not reach C before the bell")
 
-    # Signal is driven by the clock first, then the setup.
+    # Signal is driven by the clock first, then the setup. The go/no-go test is
+    # the payoff: even a perfect pin must beat the premium paid.
     if not eod["trading_day"]:
         signal = "MARKET CLOSED"
     elif eod["after_close"]:
@@ -240,7 +248,7 @@ def assemble_plan(spy: NetDealerResult, spy_spot: float,
         elif eod["arms_in_min"] is not None:
             reasons.insert(0, f"Arms in {eod['arms_in_min']:.0f} min "
                            f"(final {ARM_MINUTES} min before {eod['close_et']})")
-    elif edge is None or edge <= 0 or not atm:
+    elif not atm or payoff is None or payoff <= 0:
         signal = "STAND DOWN"
     else:
         signal = "TAKE"
@@ -259,7 +267,7 @@ def assemble_plan(spy: NetDealerResult, spy_spot: float,
         "plan": {
             "entry": round(spx_spot, 2),
             "target": c_spx,                        # the pin
-            "exit": f"settle at {eod['close_et']}",  # held to cash settlement
+            "exit": f"close at C, else settle {eod['close_et']}",  # take profit at the pin
             "reward_pts": reward, "edge_pts": edge,
             "max_risk": "100% of premium (no stop)",
             "premium": atm["premium"] if atm else None,

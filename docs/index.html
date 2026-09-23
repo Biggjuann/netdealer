@@ -384,20 +384,21 @@
       </div>
 
       <div class="panel">
-        <h3>Trade plan — ATM, held to settlement</h3>
-        <p class="hint"><b>C</b> is the pin/target. The position is held to the cash
-          settlement (no stop), so max risk is the <b>whole premium</b> if the pin misses — the
-          <b>reachability</b> read below is the guardrail: the further C sits beyond the 1σ move
-          left to the close, the lower the odds it fully pins.</p>
+        <h3>Trade plan — ATM, ride to C</h3>
+        <p class="hint"><b>Side follows C vs spot:</b> spot at the ceiling with C below → ATM put;
+          floor with C above → ATM call. Buy the <b>ATM strike at the wall</b>, ride price to
+          <b>C</b> and <b>close there</b> (else let it settle at the bell). No stop, so max risk is
+          the <b>whole premium</b> — the <b>reachability</b> read is the guardrail, and if the ATM
+          premium already exceeds the gap to C the ticket stands down.</p>
         <div class="planbar" id="spxPlan"></div>
         <div class="hint" id="spxRR" style="margin:8px 0 0"></div>
       </div>
 
       <div class="panel">
         <h3>The contract <span style="color:var(--dim);text-transform:none;letter-spacing:0">— strictly ATM, cash-settled .SPXW</span></h3>
-        <p class="hint"><b>Value at C</b> = the contract's intrinsic value if price finishes at the
-          C pin; <b>%</b> is the gain from the live ask. Liquidity shown as live <b>volume</b>
-          (SPX 0DTE carries no resting OI).</p>
+        <p class="hint"><b>Value at C</b> = the contract's intrinsic value when price reaches the
+          C pin (where you close it); <b>%</b> is the gain from the live ask. Liquidity shown as
+          live <b>volume</b> (SPX 0DTE carries no resting OI).</p>
         <div class="ctcards" id="spxCts"></div>
         <div class="logbar" id="spxLogBar" style="display:none">
           <label>Qty <input type="number" id="spxQty" min="1" step="1" value="1"></label>
@@ -953,7 +954,7 @@ function renderSpx(d){
   $("spxSig").textContent=d.signal||"—";
   const act=$("spxAct"); act.textContent=d.action||"—"; act.className="act "+(isPut?"put":"call");
   const armed = !!E.armed;
-  $("spxActD").textContent = armed ? "held to the cash settlement" : "prospective — not armed yet";
+  $("spxActD").textContent = armed ? "ride to C, close there" : "prospective — not armed yet";
 
   // Clock / arm-window readout
   const mtc=E.minutes_to_close;
@@ -983,9 +984,9 @@ function renderSpx(d){
   // Plan bar — entry / target(C) / exit(settle) / max risk
   const seg=(k,v,d2)=>`<div class="seg"><div class="k">${k}</div><div class="v mono">${v}</div><div class="d" style="font-size:10px;color:var(--dim)">${d2||""}</div></div>`;
   $("spxPlan").innerHTML =
-    seg("Entry",fmt(P.entry),"ATM ask now")
-    + seg("Target · C",fmt(P.target),"the pin")
-    + seg("Exit",P.exit||"—","cash settlement")
+    seg("Entry",fmt(P.entry),"ATM at the wall")
+    + seg("Target · C",fmt(P.target),"ride price here")
+    + seg("Exit","close at C","else settle "+((E.close_et)||"4:00 ET"))
     + seg("Max risk","100%","premium, no stop");
   const reachTxt = d.reach_sigma!=null
     ? `Reachability: C is <b style="color:${d.reachable?'var(--green)':'var(--amber)'}">${d.reach_sigma}×</b> the 1σ move to close (±${fmt(L.em,1)} pt) — ${d.reachable?"reachable":"a stretch"}`
@@ -1017,8 +1018,8 @@ function renderSpx(d){
   $("spxLogBar").style.display = hasCt ? "" : "none";
   $("spxLogMsg").textContent = "";
 
-  $("spxFoot").innerHTML = `As of ${d.asof||""} · Rule: final ${d.arm_minutes||15} min only, strictly ATM, held to `
-    + `${E.close_et||"4:00 ET"} settlement. Map from SPY OI, contract from live $SPX. SPX is cash-settled, `
+  $("spxFoot").innerHTML = `As of ${d.asof||""} · Rule: final ${d.arm_minutes||15} min only, strictly ATM at the wall, `
+    + `ride to C and close there (else settle ${E.close_et||"4:00 ET"}). Map from SPY OI, contract from live $SPX. SPX is cash-settled, `
     + `European-style, no early assignment. Read-only trade plan — the app never routes orders. <b>Not financial advice.</b>`;
 }
 
