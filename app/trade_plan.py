@@ -1,21 +1,20 @@
 """0DTE SPX trade plan — the end-of-day "pin to C" ticket.
 
-Why two symbols? Intraday, Schwab reports **zero open interest** for the SPX
-same-day (`.SPXW`) options, so every OI-driven dealer signal (crush direction,
-walls, max-pain, the pin) is blind on SPX itself. SPY carries real OI, so we
-read the *map* off SPY — exactly what the framework's calculator screenshot
-shows — and trade the *cash-settled SPX daily* against it. SPX ≈ SPY × 10 plus
-a small, live "basis" (index vs ETF), so we align SPY's levels onto the live
-SPX strike grid with ``spx = spy * 10 + basis`` before picking a contract.
+Everything is computed **natively on the live SPX 0DTE chain**. Schwab reports
+~zero resting open interest for the SPX same-day (`.SPXW`) options, but their
+VOLUME is enormous — that live volume *is* the intraday dealer inventory the
+framework calls "dynamic." So C, the walls, max-pain and the centroids all come
+straight off the SPX volume (no SPY, no ×10 basis conversion — an earlier
+version mapped SPY's stale OI onto SPX and mislocated the walls badly).
 
 **The rule (EOD Pin).** Only inside the final ``ARM_MINUTES`` of the regular
 session, with the side set by C vs spot (the pin target): spot at the ceiling
 with C below → **buy the ATM PUT**; spot at the floor with C above → **buy the
 ATM CALL**; ride price to C and exit at **C or the cash settlement, whichever
 hits first**. Strictly ATM, no stop — max risk is the whole premium, so the arm
-window, the
-payoff test (a perfect pin must beat the premium), and the reachability read are
-the guardrails. Outside the window the ticket is disarmed (WAIT / CLOSED).
+window, the payoff test (a perfect pin must beat the premium), and the
+reachability read are the guardrails. Outside the window the ticket is disarmed
+(WAIT / CLOSED).
 
 This is a **trade plan / signal**, not an order router — the app is read-only
 and never routes orders.
@@ -35,10 +34,6 @@ try:
 except Exception:  # pragma: no cover - zoneinfo always present on 3.11
     _ET = None
 
-# SPX index vs SPY ETF: SPX quotes ~10× SPY, but not exactly (dividends / expense
-# drag), so we measure the live basis instead of assuming a clean ×10.
-SPX_MULT = 10.0
-
 # EOD Pin: only arm inside the final N minutes of the regular session; the pin
 # to C completes into the cash settlement. Regular open is 9:30 ET.
 ARM_MINUTES = 15
@@ -47,13 +42,6 @@ _RTH_OPEN = (9, 30)
 # expected move; a target beyond this many σ is flagged unreachable.
 _TRADING_MINUTES_YR = 252 * 390
 REACH_SIGMA = 2.0
-
-
-def to_spx(spy_level: Optional[float], basis: float) -> Optional[float]:
-    """Map a SPY price level onto the live SPX ladder."""
-    if spy_level is None:
-        return None
-    return round(spy_level * SPX_MULT + basis, 2)
 
 
 def _nearest_strike(rows, target: float) -> Optional[float]:
@@ -153,45 +141,43 @@ def _remaining_em(spot: float, iv: Optional[float], minutes_left: Optional[float
     return round(spot * iv * math.sqrt(minutes_left / _TRADING_MINUTES_YR), 2)
 
 
-def assemble_plan(spy: NetDealerResult, spy_spot: float,
-                  spx_rows, spx_spot: float, expiry: str, dte: float,
+def assemble_plan(res: NetDealerResult, spx_spot: float,
+                  spx_rows, expiry: str, dte: float,
                   t_years: float, sessions: Optional[int],
                   min_ask: float = 0.10, min_vol: float = 500.0,
                   mode: str = "live", now: Optional[dt.datetime] = None) -> dict:
-    """Compose the EOD-Pin ticket from the SPY dealer map + live SPX chain.
+    """Compose the EOD-Pin ticket from levels computed natively on the SPX chain.
 
-    The trade only exists inside the final ``ARM_MINUTES``: ceiling + C below →
-    ATM put, floor + C above → ATM call, held to the cash settlement.
+    ``res`` is a ``NetDealerResult`` computed on the live SPX 0DTE chain — its
+    C, centroids and (volume-based) walls are already in SPX points, so there is
+    no conversion. The trade only exists inside the final ``ARM_MINUTES``:
+    ceiling + C below → ATM put, floor + C above → ATM call, ride to C.
     """
     eod = eod_state(now)
-    basis = round(spx_spot - spy_spot * SPX_MULT, 2)
 
-    # Translate every SPY level onto the live SPX ladder.
-    c_spx = to_spx(spy.c_target, basis)
-    em = _remaining_em(spx_spot, spy.atm_iv, eod["minutes_to_close"])
+    # Everything is already in SPX points — no SPY, no ×10 basis.
+    c_spx = res.c_target
+    em = _remaining_em(spx_spot, res.atm_iv, eod["minutes_to_close"])
     lvl = {
         "spot": round(spx_spot, 2),
         "c": c_spx,
-        "sweet_low": to_spx(spy.sweet_spot_low, basis),
-        "sweet_high": to_spx(spy.sweet_spot_high, basis),
-        "call_wall": to_spx(spy.call_wall, basis),
-        "put_wall": to_spx(spy.put_wall, basis),
-        "max_pain": to_spx(spy.max_pain, basis),
-        "long_avg": to_spx(spy.long_avg, basis),
-        "short_avg": to_spx(spy.short_avg, basis),
-        "basis": basis,
+        "sweet_low": res.sweet_spot_low,
+        "sweet_high": res.sweet_spot_high,
+        "call_wall": res.call_wall,
+        "put_wall": res.put_wall,
+        "max_pain": res.max_pain,
+        "long_avg": res.long_avg,
+        "short_avg": res.short_avg,
         "em": em,
     }
 
-    # The trade targets the C pin, so the SIDE follows C vs spot — never the
-    # crush read. Ceiling (C below spot) → price pulled DOWN → ATM PUT; floor
-    # (C above spot) → ATM CALL. This is the user's rule, and it keeps the ATM
-    # contract finishing ITM at C. The crush is a *confirmation* only, surfaced
-    # as agreement below. (If C is unknown, fall back to the crush read.)
+    # The trade targets the C pin, so the SIDE follows C vs spot. Ceiling (C
+    # below spot) → price pulled DOWN → ATM PUT; floor (C above spot) → ATM
+    # CALL. Live volume skew is a *confirmation* only, surfaced below.
     if c_spx is not None:
         side = "PUT" if c_spx <= spx_spot else "CALL"
     else:
-        side = "PUT" if spy.crush_direction == "DOWN" else "CALL"
+        side = "PUT" if res.volume_bias == "DOWN" else "CALL"
     action = "BUY ATM PUT" if side == "PUT" else "BUY ATM CALL"
     pin_dir = "DOWN" if side == "PUT" else "UP"          # direction of the pull to C
 
@@ -216,15 +202,11 @@ def assemble_plan(spy: NetDealerResult, spy_spot: float,
         where = ("spot at the ceiling, C below" if side == "PUT"
                  else "spot at the floor, C above")
         reasons.append(f"{where} — {edge} pt to the C pin → {action} to ride to C")
-    # The crush is a confirmation of the pin direction, not the side selector.
-    if spy.crush_direction == pin_dir:
-        reasons.append(f"Crush {spy.crush_direction} confirms "
-                       f"({(spy.expensive_side or '?')}s expensive)")
-    elif spy.crush_direction:
-        warnings.append(f"Crush reads {spy.crush_direction}, against the pin — "
-                        f"dealer positioning does not confirm")
-    if spy.volume_agree is False:
-        warnings.append(f"Live volume skewing {spy.volume_bias}, against the pin")
+    # Live volume skew is a confirmation of the pin direction, not the selector.
+    if res.volume_bias == pin_dir:
+        reasons.append(f"Live SPX volume skewing {res.volume_bias} — confirms the pull to C")
+    elif res.volume_bias:
+        warnings.append(f"Live SPX volume skewing {res.volume_bias}, against the pin")
     if payoff is not None and payoff <= 0:
         warnings.append("A perfect pin to C still loses — the ATM premium exceeds "
                         "the gap to C; no edge here")
@@ -259,7 +241,7 @@ def assemble_plan(spy: NetDealerResult, spy_spot: float,
         "expiry": expiry, "dte": round(dte, 3), "sessions": sessions,
         "mode": mode,
         "signal": signal, "action": action, "side": side,
-        "confidence": round(spy.confidence or 0.0, 1),
+        "confidence": round(res.confidence or 0.0, 1),
         "reasons": reasons, "warnings": warnings,
         "eod": eod,
         "arm_minutes": ARM_MINUTES,
@@ -275,14 +257,10 @@ def assemble_plan(spy: NetDealerResult, spy_spot: float,
             "payoff_at_c": payoff,                  # $ per contract-point if C prints
         },
         "contracts": contracts,
-        "spy": {
-            "spot": round(spy_spot, 2),
-            "c": spy.c_target,
-            "crush_direction": spy.crush_direction,
-            "expensive_side": spy.expensive_side,
-            "volume_bias": spy.volume_bias,
-            "call_wall": spy.call_wall, "put_wall": spy.put_wall,
-            "sweet_low": spy.sweet_spot_low, "sweet_high": spy.sweet_spot_high,
-            "confidence": spy.confidence,
+        "source": {
+            "computed_on": "$SPX 0DTE volume", "volume_bias": res.volume_bias,
+            "call_wall": res.call_wall, "put_wall": res.put_wall,
+            "total_call_volume": res.total_call_volume,
+            "total_put_volume": res.total_put_volume,
         },
     }

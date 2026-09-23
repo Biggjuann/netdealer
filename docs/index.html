@@ -375,11 +375,11 @@
       <div class="whyrow" id="spxWhy"></div>
 
       <div class="panel">
-        <h3>SPX levels — translated from the SPY dealer map</h3>
-        <p class="hint">SPX same-day options show ~zero open interest intraday, so the crush /
-          walls / pin are read off <b>SPY</b> and mapped onto SPX with
-          <span class="mono">spx = spy×10 + basis</span> (<span id="spxBasis">—</span>). These are the
-          <b>tradeable</b> SPX prices. <b>Not financial advice.</b></p>
+        <h3>SPX levels — computed on the live SPX 0DTE chain</h3>
+        <p class="hint">SPX same-day options carry ~zero resting open interest but enormous
+          <b>volume</b> — that live volume <i>is</i> the intraday dealer inventory, so
+          <b>C</b>, the <b>walls</b>, max-pain and the centroids are all computed straight off the
+          SPX volume (<span id="spxBasis">—</span>). No SPY, no ×10 conversion. <b>Not financial advice.</b></p>
         <div class="lvlgrid" id="spxLvls"></div>
       </div>
 
@@ -930,7 +930,7 @@ async function runScan(){
 let SPX_LOADED = false;
 async function runSpx(){
   const btn=$("spxBtn"); btn.disabled=true; const prev=btn.textContent; btn.textContent="Reading…";
-  $("spxSum").textContent="Reading today's SPX setup from the SPY dealer map…"; msg("");
+  $("spxSum").textContent="Reading today's SPX setup from the live SPX 0DTE chain…"; msg("");
   try{
     const r=await fetch(api("/api/spx-trade"));
     const d=await r.json();
@@ -944,8 +944,9 @@ function renderSpx(d){
   $("spxTicket").style.display="";
   SPX_LAST = d;
   const L=d.levels||{}, P=d.plan||{}, E=d.eod||{}, isPut=d.side==="PUT";
+  const src=d.source||{};
   $("spxSum").innerHTML = `<b>$SPX</b> ${fmt(L.spot)} · exp <b>${d.expiry}</b> (0DTE) · `
-    + `<span style="color:var(--muted)">${(d.mode||"").toUpperCase()}</span> · SPY map spot ${fmt(d.spy&&d.spy.spot)}`;
+    + `<span style="color:var(--muted)">${(d.mode||"").toUpperCase()}</span> · computed on live SPX volume`;
 
   // Banner — signal driven by the clock (arm window) then the setup.
   const sig=(d.signal||"").toUpperCase();
@@ -970,7 +971,7 @@ function renderSpx(d){
   (d.warnings||[]).forEach(t=>{ const s=document.createElement("span"); s.className="why warn"; s.textContent="⚠ "+t; why.appendChild(s); });
 
   // Levels
-  $("spxBasis").textContent = `basis ${L.basis>=0?"+":""}${fmt(L.basis,1)}`;
+  $("spxBasis").textContent = src.volume_bias ? `live volume skew ${src.volume_bias}` : "live SPX volume";
   const lv=$("spxLvls"); lv.innerHTML="";
   const cell=(k,v,d2,extra)=>`<div class="lvl ${extra||""}"><div class="k">${k}</div><div class="v mono">${v}</div><div class="d">${d2||""}</div></div>`;
   lv.innerHTML =
@@ -1019,7 +1020,7 @@ function renderSpx(d){
   $("spxLogMsg").textContent = "";
 
   $("spxFoot").innerHTML = `As of ${d.asof||""} · Rule: final ${d.arm_minutes||15} min only, strictly ATM at the wall, `
-    + `ride to C — exit at C or the ${E.close_et||"4:00 ET"} settlement, whichever hits first. Map from SPY OI, contract from live $SPX. SPX is cash-settled, `
+    + `ride to C — exit at C or the ${E.close_et||"4:00 ET"} settlement, whichever hits first. Levels + contract from the live $SPX volume. SPX is cash-settled, `
     + `European-style, no early assignment. Read-only trade plan — the app never routes orders. <b>Not financial advice.</b>`;
 }
 

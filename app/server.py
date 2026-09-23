@@ -21,7 +21,7 @@ import datetime as dt
 
 from app.config import settings
 from app.market_calendar import sessions_to_expiry
-from app.net_dealer import compute, setup_confidence
+from app.net_dealer import compute, max_pain_volume, peak_volume_strike, setup_confidence
 from app.providers.factory import build_provider
 from app.scanner import _range_for, classify_range, rank_contracts, run_scan
 from app.timeutil import t_years
@@ -136,64 +136,49 @@ SPY_SYMBOL = "SPY"
 @app.get("/api/spx-trade")
 def spx_trade(expiry: str = Query("", description="0DTE expiry; blank = nearest (today)")
               ) -> JSONResponse:
-    """A 0DTE SPX trade plan built from the SPY dealer map.
+    """A 0DTE SPX trade plan computed natively on the live ``$SPX`` chain.
 
-    SPX same-day options report ~zero OI intraday, so the dealer signals (crush,
-    walls, pin) are read off SPY (real OI) and translated onto the live SPX
-    ladder; the tradeable contracts come from the live ``$SPX`` chain. Read-only
-    analysis — a plan and a signal, never an order.
+    SPX same-day options report ~zero resting OI but enormous VOLUME — that live
+    volume is the intraday dealer inventory the framework blends in, so C, the
+    walls, max-pain and the centroids are all computed straight off the SPX
+    volume (no SPY, no ×10 basis). Read-only analysis — a plan, never an order.
     """
     try:
         exp = expiry.strip()
         if not exp:
-            exps = provider.get_expirations(SPY_SYMBOL)
+            exps = provider.get_expirations(SPX_SYMBOL) or provider.get_expirations(SPY_SYMBOL)
             if not exps:
-                return JSONResponse({"error": "no SPY expirations available"}, status_code=502)
+                return JSONResponse({"error": "no SPX expirations available"}, status_code=502)
             exp = exps[0]
-        spy_rows, spy_spot = provider.get_chain(SPY_SYMBOL, exp, settings.strike_count)
         spx_rows, spx_spot = provider.get_chain(SPX_SYMBOL, exp, settings.strike_count)
     except Exception as exc:  # pragma: no cover - network
         log.warning("spx-trade %s failed: %s", expiry, exc)
         return JSONResponse({"error": f"chain fetch failed: {exc}"}, status_code=502)
 
-    if not spy_rows or not spy_spot:
-        return JSONResponse({"error": "SPY chain unavailable"}, status_code=502)
     if not spx_rows or not spx_spot:
         return JSONResponse({"error": "SPX chain unavailable"}, status_code=502)
 
     ty, dte = t_years(exp)
-    spy = compute(SPY_SYMBOL, exp, spy_rows, spy_spot, ty, dte,
+    res = compute(SPX_SYMBOL, exp, spx_rows, spx_spot, ty, dte,
                   r=settings.risk_free_rate, fallback_iv=settings.fallback_iv,
                   volume_weight=settings.volume_weight, blend_mode=settings.blend_mode,
                   blend_alpha=settings.blend_alpha)
-    if spy.c_target is None:
-        return JSONResponse({"error": "could not solve C on SPY"}, status_code=502)
+    if res.c_target is None:
+        return JSONResponse({"error": "could not solve C on SPX"}, status_code=502)
 
-    # Fold real 30d reachability + top-pick liquidity into SPY's confidence so the
-    # gate matches what the Calculator/Scanner show for SPY.
-    try:
-        stats = _range_for(provider, SPY_SYMBOL)
-        rc, _m, _x = classify_range(abs(spy.c_target - spy_spot), spy_spot, dte, stats)
-        pside = "CALL" if spy.c_target > spy_spot else "PUT"
-        top = rank_contracts(spy_rows, spy.c_target, pside, min_gain=0.0, limit=1)
-        liq = top[0]["contract_oi"] if top else None
-        expensive_crush = (spy.call_crush_pct if spy.expensive_side == "CALL"
-                           else spy.put_crush_pct if spy.expensive_side == "PUT" else None)
-        score, breakdown = setup_confidence(spy.direction_agree, expensive_crush,
-                                            spy.pin_steepness, range_reach=rc,
-                                            iv_reach=spy.iv_reach, liquidity_oi=liq,
-                                            volume_agree=spy.volume_agree)
-        spy.confidence = score
-        spy.confidence_breakdown = breakdown
-    except Exception as exc:  # pragma: no cover - defensive
-        log.warning("spx-trade confidence upgrade failed: %s", exc)
+    # SPX 0DTE carries ~zero resting OI, so the OI-based walls / max-pain come
+    # back blind. Recompute them from live VOLUME (the real intraday inventory).
+    if not res.total_call_oi and not res.total_put_oi:
+        res.call_wall = peak_volume_strike(spx_rows, "call")
+        res.put_wall = peak_volume_strike(spx_rows, "put")
+        res.max_pain = max_pain_volume(spx_rows)
 
     try:
         sess = sessions_to_expiry(dt.date.fromisoformat(exp))
     except (ValueError, TypeError):
         sess = None
 
-    plan = assemble_plan(spy, spy_spot, spx_rows, spx_spot, exp, dte, ty, sess,
+    plan = assemble_plan(res, spx_spot, spx_rows, exp, dte, ty, sess,
                          min_ask=settings.scan_min_ask,
                          mode="live" if settings.live else "mock")
     return JSONResponse(plan)
