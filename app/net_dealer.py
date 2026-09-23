@@ -377,6 +377,35 @@ def _peak_oi_strike(rows: List[StrikeRow], side: str) -> Optional[float]:
     return best
 
 
+def peak_volume_strike(rows: List[StrikeRow], side: str) -> Optional[float]:
+    """Wall from live VOLUME — the intraday dealer inventory. Needed for SPX
+    0DTE, which reports ~zero resting OI so the OI wall is blind."""
+    best, best_v = None, -1.0
+    for row in rows:
+        v = (row.call_volume if side == "call" else row.put_volume) or 0.0
+        if v > best_v:
+            best_v, best = v, row.strike
+    return best
+
+
+def max_pain_volume(rows: List[StrikeRow]) -> Optional[float]:
+    """Max-pain min-payout strike computed on VOLUME instead of OI (SPX 0DTE)."""
+    cand = [r.strike for r in rows if (r.call_volume or r.put_volume)]
+    if not cand:
+        return None
+    best_strike, best_cost = None, None
+    for settle in cand:
+        cost = 0.0
+        for row in rows:
+            if row.call_volume and settle > row.strike:
+                cost += (settle - row.strike) * row.call_volume
+            if row.put_volume and settle < row.strike:
+                cost += (row.strike - settle) * row.put_volume
+        if best_cost is None or cost < best_cost:
+            best_cost, best_strike = cost, settle
+    return best_strike
+
+
 def compute(ticker: str, expiry: str, rows: List[StrikeRow], spot: Optional[float],
             t_years: float, dte: float, r: float = DEFAULT_RATE,
             fallback_iv: float = DEFAULT_IV, volume_weight: float = 0.0,
