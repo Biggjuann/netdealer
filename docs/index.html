@@ -387,9 +387,9 @@
         <h3>Trade plan — ATM, ride to C</h3>
         <p class="hint"><b>Side follows C vs spot:</b> spot at the ceiling with C below → ATM put;
           floor with C above → ATM call. Buy the <b>ATM strike at the wall</b>, ride price to
-          <b>C</b> and <b>close there</b> (else let it settle at the bell). No stop, so max risk is
-          the <b>whole premium</b> — the <b>reachability</b> read is the guardrail, and if the ATM
-          premium already exceeds the gap to C the ticket stands down.</p>
+          <b>C</b> and exit at <b>C or the cash settlement — whichever hits first</b>. No stop, so
+          max risk is the <b>whole premium</b> — the <b>reachability</b> read is the guardrail, and
+          if the ATM premium already exceeds the gap to C the ticket stands down.</p>
         <div class="planbar" id="spxPlan"></div>
         <div class="hint" id="spxRR" style="margin:8px 0 0"></div>
       </div>
@@ -954,7 +954,7 @@ function renderSpx(d){
   $("spxSig").textContent=d.signal||"—";
   const act=$("spxAct"); act.textContent=d.action||"—"; act.className="act "+(isPut?"put":"call");
   const armed = !!E.armed;
-  $("spxActD").textContent = armed ? "ride to C, close there" : "prospective — not armed yet";
+  $("spxActD").textContent = armed ? "ride to C or settlement, whichever first" : "prospective — not armed yet";
 
   // Clock / arm-window readout
   const mtc=E.minutes_to_close;
@@ -986,7 +986,7 @@ function renderSpx(d){
   $("spxPlan").innerHTML =
     seg("Entry",fmt(P.entry),"ATM at the wall")
     + seg("Target · C",fmt(P.target),"ride price here")
-    + seg("Exit","close at C","else settle "+((E.close_et)||"4:00 ET"))
+    + seg("Exit","C / settle","whichever first")
     + seg("Max risk","100%","premium, no stop");
   const reachTxt = d.reach_sigma!=null
     ? `Reachability: C is <b style="color:${d.reachable?'var(--green)':'var(--amber)'}">${d.reach_sigma}×</b> the 1σ move to close (±${fmt(L.em,1)} pt) — ${d.reachable?"reachable":"a stretch"}`
@@ -1019,7 +1019,7 @@ function renderSpx(d){
   $("spxLogMsg").textContent = "";
 
   $("spxFoot").innerHTML = `As of ${d.asof||""} · Rule: final ${d.arm_minutes||15} min only, strictly ATM at the wall, `
-    + `ride to C and close there (else settle ${E.close_et||"4:00 ET"}). Map from SPY OI, contract from live $SPX. SPX is cash-settled, `
+    + `ride to C — exit at C or the ${E.close_et||"4:00 ET"} settlement, whichever hits first. Map from SPY OI, contract from live $SPX. SPX is cash-settled, `
     + `European-style, no early assignment. Read-only trade plan — the app never routes orders. <b>Not financial advice.</b>`;
 }
 
