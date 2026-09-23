@@ -11,8 +11,9 @@ SPX strike grid with ``spx = spy * 10 + basis`` before picking a contract.
 **The rule (EOD Pin).** Only inside the final ``ARM_MINUTES`` of the regular
 session, with the side set by C vs spot (the pin target): spot at the ceiling
 with C below → **buy the ATM PUT**; spot at the floor with C above → **buy the
-ATM CALL**; ride price to C and **close at C** (else let it settle at the bell).
-Strictly ATM, no stop — max risk is the whole premium, so the arm window, the
+ATM CALL**; ride price to C and exit at **C or the cash settlement, whichever
+hits first**. Strictly ATM, no stop — max risk is the whole premium, so the arm
+window, the
 payoff test (a perfect pin must beat the premium), and the reachability read are
 the guardrails. Outside the window the ticket is disarmed (WAIT / CLOSED).
 
@@ -267,7 +268,7 @@ def assemble_plan(spy: NetDealerResult, spy_spot: float,
         "plan": {
             "entry": round(spx_spot, 2),
             "target": c_spx,                        # the pin
-            "exit": f"close at C, else settle {eod['close_et']}",  # take profit at the pin
+            "exit": f"C or {eod['close_et']} settlement — whichever first",
             "reward_pts": reward, "edge_pts": edge,
             "max_risk": "100% of premium (no stop)",
             "premium": atm["premium"] if atm else None,

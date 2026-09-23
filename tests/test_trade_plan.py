@@ -69,7 +69,7 @@ def test_armed_c_below_spot_takes_atm_put():
     assert p["signal"] == "TAKE", p["warnings"]
     assert p["plan"]["target"] == to_spx(770.0, p["levels"]["basis"])
     assert p["plan"]["edge_pts"] > 0
-    assert "close at C" in p["plan"]["exit"]
+    assert "whichever first" in p["plan"]["exit"]
     print(f"ok  armed C<spot → TAKE BUY ATM PUT, target C={p['plan']['target']}")
 
 
@@ -95,7 +95,7 @@ def test_wall_pin_matches_real_trade():
     c = p["contracts"][0]
     assert c["strike"] == 7775.0 and c["symbol"].endswith("P7775")
     assert c["value_at_c"] == 9.0
-    assert "close at C" in p["plan"]["exit"]
+    assert "whichever first" in p["plan"]["exit"]
     print(f"ok  wall pin: {c['symbol']} valC={c['value_at_c']} exit='{p['plan']['exit']}'")
 
 
