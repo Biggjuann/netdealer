@@ -23,7 +23,7 @@ from app.config import settings
 from app.market_calendar import sessions_to_expiry
 from app.net_dealer import compute, max_pain_volume, peak_volume_strike, setup_confidence
 from app.providers.factory import build_provider
-from app.scanner import _range_for, classify_range, rank_contracts, run_scan
+from app.scanner import _range_for, classify_range, rank_contracts, run_scan, wall_scan
 from app.timeutil import t_years
 from app.trade_plan import assemble_plan
 
@@ -245,6 +245,26 @@ def scan(refresh: bool = Query(False, description="bypass the short-lived cache"
     except Exception as exc:  # pragma: no cover - defensive
         log.warning("scan failed: %s", exc)
         return JSONResponse({"error": f"scan failed: {exc}"}, status_code=502)
+    return JSONResponse(payload)
+
+
+@app.get("/api/wall-scan")
+def wall_scan_endpoint(
+        refresh: bool = Query(False, description="bypass the short-lived cache"),
+        within: float = Query(None, ge=0.0, le=0.2,
+                              description="'at the wall' band as a fraction of spot (0.01 = 1%)")
+        ) -> JSONResponse:
+    """Rank the curated universe by how close spot sits to its nearest OI wall.
+
+    Surfaces the pin setups the strategy keys on: price parked at the call wall
+    (dealers pull DOWN → puts) or the put wall (pull UP → calls) on the nearest
+    expiry. ``within`` sets the 'at the wall' band (default from config).
+    """
+    try:
+        payload = wall_scan(provider, within_pct=within, use_cache=not refresh)
+    except Exception as exc:  # pragma: no cover - defensive
+        log.warning("wall-scan failed: %s", exc)
+        return JSONResponse({"error": f"wall scan failed: {exc}"}, status_code=502)
     return JSONResponse(payload)
 
 

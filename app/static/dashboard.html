@@ -210,6 +210,7 @@
     <button class="tab" id="tabScan" data-view="scan">📡 Opportunity Scanner</button>
     <button class="tab" id="tabMap" data-view="map">🗺️ Daily Map</button>
     <button class="tab" id="tabSpx" data-view="spx">⚡ 0DTE SPX</button>
+    <button class="tab" id="tabWalls" data-view="walls">🧱 Wall Scanner</button>
     <button class="tab" id="tabJournal" data-view="journal">📓 Journal</button>
   </div>
   <div id="msg"></div>
@@ -410,6 +411,40 @@
       <p class="hint" id="spxFoot" style="margin-top:2px"></p>
     </div>
   </div><!-- /spxView -->
+
+  <div id="wallsView" style="display:none">
+    <div class="scanbar">
+      <button id="wallBtn" class="go">Scan walls</button>
+      <label class="scanopt">Band
+        <select id="wallBand">
+          <option value="0.005">0.5%</option>
+          <option value="0.01" selected>1%</option>
+          <option value="0.02">2%</option>
+          <option value="0.03">3%</option>
+        </select>
+      </label>
+      <label class="scanopt"><input type="checkbox" id="wallAtOnly" checked> at-wall only</label>
+      <div class="sum" id="wallSum">Finds tickers <b>parked at their call or put wall</b> on the nearest expiry — the pin setups: at the <b>call wall</b> dealers pull <b>down → puts</b>; at the <b>put wall</b> they pull <b>up → calls</b>. Hit <b>Scan walls</b>.</div>
+    </div>
+    <div class="panel">
+      <h3>At the wall <span style="color:var(--dim);text-transform:none;letter-spacing:0">— spot pinned to an OI wall, nearest expiry</span></h3>
+      <p class="hint"><b>Wall</b> is the strike carrying the most open interest near price.
+        <b>Dist</b> is how far spot sits from it. <b>Pull</b> is the framework read (at resistance → down, at support → up),
+        <b>Trade</b> the side that rides toward C, and <b>C✓</b> means the net-dealer C sits on that same side (a stronger setup).
+        <span style="color:var(--amber)">⚠ through</span> = price has broken past the wall (pin likely failed). <b>Not financial advice.</b></p>
+      <div style="overflow-x:auto">
+        <table class="scan" id="wallTable">
+          <thead><tr>
+            <th class="l">#</th><th class="l">Ticker</th><th>Spot</th><th>Wall</th><th>Side</th>
+            <th>Dist</th><th>Pull</th><th>Trade</th><th>C</th><th>C✓</th>
+            <th>Conf</th><th>Exp</th>
+          </tr></thead>
+          <tbody id="wallBody"></tbody>
+        </table>
+      </div>
+      <div class="skips" id="wallSkips"></div>
+    </div>
+  </div><!-- /wallsView -->
 
   <div id="journalView" style="display:none">
     <div class="scanbar">
@@ -807,16 +842,75 @@ function showView(v){
   $("scanView").style.display = v==="scan" ? "" : "none";
   $("mapView").style.display = v==="map" ? "" : "none";
   $("spxView").style.display = v==="spx" ? "" : "none";
+  $("wallsView").style.display = v==="walls" ? "" : "none";
   $("journalView").style.display = v==="journal" ? "" : "none";
   $("tabCalc").classList.toggle("active", v==="calc");
   $("tabScan").classList.toggle("active", v==="scan");
   $("tabMap").classList.toggle("active", v==="map");
   $("tabSpx").classList.toggle("active", v==="spx");
+  $("tabWalls").classList.toggle("active", v==="walls");
   $("tabJournal").classList.toggle("active", v==="journal");
   if(v==="scan" && !SCANNED) runScan();
   if(v==="map" && currentTicker() && MAP_TICKER!==currentTicker()) runMap();
   if(v==="spx" && !SPX_LOADED) runSpx();
+  if(v==="walls" && !WALLS_LOADED) runWalls();
   if(v==="journal") renderJournal();
+}
+
+// ---- Wall scanner ----
+let WALLS_LOADED = false, WALL_DATA = null;
+async function runWalls(){
+  const btn=$("wallBtn"); btn.disabled=true; const prev=btn.textContent; btn.textContent="Scanning…";
+  $("wallSum").textContent="Scanning the universe for tickers at a wall…"; msg("");
+  try{
+    const within=$("wallBand").value;
+    const r=await fetch(api("/api/wall-scan?within="+encodeURIComponent(within)));
+    const d=await r.json();
+    if(d.error){ msg("Wall scan failed: "+d.error); return; }
+    WALLS_LOADED=true; WALL_DATA=d; renderWalls(d);
+  }catch(e){ msg("Wall scan failed: "+e); }
+  finally{ btn.disabled=false; btn.textContent=prev; }
+}
+function renderWalls(d){
+  const atOnly=$("wallAtOnly").checked;
+  let rows=(d.results||[]).filter(r=>atOnly?r.at_wall:true);
+  $("wallSum").innerHTML = `Scanned <b>${d.scanned}</b> · <b>${d.at_wall}</b> at the wall `
+    + `(±${(d.within_pct*100).toFixed(1)}%) · showing <b>${rows.length}</b> · `
+    + `<span style="color:var(--muted)">${(d.mode||"").toUpperCase()}${d.cached?` · cached ${d.age_seconds}s`:""}</span>`;
+  const body=$("wallBody"); body.innerHTML="";
+  rows.forEach((r,i)=>{
+    const tr=document.createElement("tr");
+    tr.title="Open "+r.ticker+" in the Calculator";
+    const tradeCls=r.trade_side==="CALL"?"sideCall":"sidePut";
+    const pullCls=r.pull==="UP"?"edgeUp":"edgeDn";
+    const wallTag = r.wall_side==="CALL"
+      ? `<span class="tag cw">CW</span>` : `<span class="tag pw">PW</span>`;
+    const distCls = r.at_wall ? "gain" : "";
+    const thru = r.through ? ` <span style="color:var(--amber)" title="price has broken past the wall — pin likely failed">⚠</span>` : "";
+    const cy = r.c_confirms
+      ? `<span style="color:var(--green)" title="C sits on the pull side — confirms">✓</span>`
+      : `<span style="color:var(--dim)" title="C does not confirm the wall's pull">–</span>`;
+    tr.innerHTML =
+      `<td class="l rank">${i+1}</td>`
+      + `<td class="l tk">${r.ticker}</td>`
+      + `<td>${fmt(r.spot, r.spot>=100?0:2)}</td>`
+      + `<td>${fmt(r.wall, r.wall>=100?0:2)} ${wallTag}</td>`
+      + `<td class="${r.wall_side==='CALL'?'sideCall':'sidePut'}">${r.wall_side}${thru}</td>`
+      + `<td class="${distCls}">${(r.dist_pct*100).toFixed(2)}%</td>`
+      + `<td class="${pullCls}">${r.pull==='UP'?'▲':'▼'} ${r.pull}</td>`
+      + `<td class="${tradeCls}">${r.trade_side}</td>`
+      + `<td title="net-dealer C">${fmt(r.c_target, r.c_target>=100?0:2)}</td>`
+      + `<td>${cy}</td>`
+      + `<td>${confBadge(r.confidence)}</td>`
+      + `<td style="color:var(--muted)">${r.expiry||"—"}${r.sessions!=null?` <span class="reach ${r.sessions<1?'mean':'max'}" style="padding:1px 5px">${r.sessions}DTE</span>`:""}</td>`;
+    tr.addEventListener("click",()=>openInCalc(r));
+    body.appendChild(tr);
+  });
+  $("wallSkips").textContent = (d.skipped&&d.skipped.length)
+    ? "Skipped ("+d.skipped.length+"): "+d.skipped.slice(0,12).map(s=>s.ticker+" ("+s.reason+")").join(", ")
+    : "";
+  if(!rows.length) $("wallSkips").textContent = atOnly
+    ? "No tickers within the band right now — widen the band or uncheck 'at-wall only'." : "No rows.";
 }
 
 // ---- Daily Map ----
@@ -1229,7 +1323,11 @@ $("tabCalc").addEventListener("click",()=>showView("calc"));
 $("tabScan").addEventListener("click",()=>showView("scan"));
 $("tabMap").addEventListener("click",()=>showView("map"));
 $("tabSpx").addEventListener("click",()=>showView("spx"));
+$("tabWalls").addEventListener("click",()=>showView("walls"));
 $("tabJournal").addEventListener("click",()=>showView("journal"));
+$("wallBtn").addEventListener("click",runWalls);
+$("wallBand").addEventListener("change",runWalls);
+$("wallAtOnly").addEventListener("change",()=>{ if(WALL_DATA) renderWalls(WALL_DATA); });
 $("mapBtn").addEventListener("click",runMap);
 $("spxBtn").addEventListener("click",runSpx);
 $("spxLogBtn").addEventListener("click",logCurrentTrade);
