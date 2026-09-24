@@ -7,7 +7,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.config import settings
 from app.net_dealer import StrikeRow, bs_price
 from app.providers.mock import MockChainProvider
-from app.scanner import _best_contract, evaluate, rank_contracts, run_scan
+from app.scanner import (ScanRow, _best_contract, _wall_row, evaluate,
+                         rank_contracts, run_scan, wall_scan)
 
 
 def test_bs_price_sane():
@@ -132,6 +133,52 @@ def test_week_chains_for_daily_map():
     for expiry, rows, spot in chains:
         assert rows and spot, f"{expiry} should have a chain + spot"
     print(f"ok  week chains: {len(chains)} daily expiries {exps[0]}..{exps[-1]}")
+
+
+def _row(spot, call_wall, put_wall, c):
+    return ScanRow(ticker="X", spot=spot, c_target=c, edge_pct=None, direction=None,
+                   expiry="2026-09-25", dte=1.0, call_wall=call_wall, put_wall=put_wall)
+
+
+def test_wall_row_call_wall_is_put_setup():
+    # Spot at the call wall (resistance just above) → pull DOWN → buy PUT; C below
+    # spot confirms.
+    w = _wall_row(_row(100.0, 101.0, 90.0, 99.0), within=0.01)
+    assert w["wall_side"] == "CALL" and w["pull"] == "DOWN" and w["trade_side"] == "PUT"
+    assert w["at_wall"] is True and w["through"] is False and w["c_confirms"] is True
+    assert abs(w["dist_pct"] - 0.01) < 1e-9
+    print(f"ok  at call wall → PUT setup (dist {w['dist_pct']*100:.1f}%, c_confirms {w['c_confirms']})")
+
+
+def test_wall_row_put_wall_is_call_setup():
+    # Spot at the put wall (support just below) → pull UP → buy CALL; C above confirms.
+    w = _wall_row(_row(100.0, 110.0, 99.5, 101.0), within=0.01)
+    assert w["wall_side"] == "PUT" and w["pull"] == "UP" and w["trade_side"] == "CALL"
+    assert w["at_wall"] is True and w["c_confirms"] is True
+    print(f"ok  at put wall → CALL setup (dist {w['dist_pct']*100:.2f}%)")
+
+
+def test_wall_row_through_and_far():
+    # Spot broke above the call wall → through=True.
+    assert _wall_row(_row(102.0, 101.0, 90.0, 100.0), within=0.01)["through"] is True
+    # Spot far from either wall → at_wall=False.
+    assert _wall_row(_row(100.0, 108.0, 92.0, 100.0), within=0.01)["at_wall"] is False
+    print("ok  through-wall and far-from-wall flags")
+
+
+def test_wall_scan_sorted_at_wall_first():
+    prov = MockChainProvider()
+    d = wall_scan(prov, tickers=["NVDA", "AAPL", "TSLA", "PFE", "GOOGL", "HD"],
+                  within_pct=0.03, use_cache=False)
+    assert d["scanned"] == 6 and d["results"]
+    # at-wall rows come first, then by ascending distance within each group.
+    flags = [(not r["at_wall"], r["dist_pct"]) for r in d["results"]]
+    assert flags == sorted(flags), "rows must be at-wall first, then nearest"
+    for r in d["results"]:
+        assert r["wall_side"] in ("CALL", "PUT")
+        assert r["trade_side"] == ("PUT" if r["wall_side"] == "CALL" else "CALL")
+        assert r["pull"] == ("DOWN" if r["wall_side"] == "CALL" else "UP")
+    print(f"ok  wall scan: {d['at_wall']}/{d['scanned']} at the wall, sorted by proximity")
 
 
 def test_run_scan_cache():

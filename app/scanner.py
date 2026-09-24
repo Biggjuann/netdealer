@@ -284,6 +284,99 @@ def evaluate(provider, ticker: str, week_index: int = 0,
     return base
 
 
+# ----- wall scan: tickers sitting AT their call / put wall ------------------
+_wall_lock = threading.Lock()
+_wall_cache: dict = {"ts": 0.0, "key": None, "payload": None}
+
+
+def _wall_row(r: ScanRow, within: float) -> Optional[dict]:
+    """Turn a ScanRow into a wall-proximity row (or None if walls are missing).
+
+    Picks whichever wall spot is nearest, and reads the pin the framework way:
+    at the CALL wall (resistance) dealers pull DOWN → buy PUTs; at the PUT wall
+    (support) they pull UP → buy CALLs. ``c_confirms`` is True when C sits on
+    that same side (a stronger setup)."""
+    if r.spot is None or (r.call_wall is None and r.put_wall is None):
+        return None
+    spot = r.spot
+    d_call = abs(r.call_wall - spot) / spot if r.call_wall else 9e9
+    d_put = abs(r.put_wall - spot) / spot if r.put_wall else 9e9
+    if d_call <= d_put:
+        wall_side, wall, dist = "CALL", r.call_wall, d_call
+        through = spot > wall                       # broke above resistance
+        pull, trade_side = "DOWN", "PUT"
+        c_confirms = r.c_target is not None and r.c_target < spot
+    else:
+        wall_side, wall, dist = "PUT", r.put_wall, d_put
+        through = spot < wall                       # broke below support
+        pull, trade_side = "UP", "CALL"
+        c_confirms = r.c_target is not None and r.c_target > spot
+    return {
+        "ticker": r.ticker, "spot": round(spot, 2), "c_target": r.c_target,
+        "expiry": r.expiry, "dte": r.dte, "sessions": r.sessions,
+        "call_wall": r.call_wall, "put_wall": r.put_wall,
+        "wall_side": wall_side, "wall": wall,
+        "dist_pct": round(dist, 4), "at_wall": dist <= within, "through": through,
+        "pull": pull, "trade_side": trade_side, "c_confirms": c_confirms,
+        "confidence": r.confidence, "crush_direction": r.crush_direction,
+        "volume_bias": r.volume_bias,
+    }
+
+
+def wall_scan(provider, tickers: Optional[List[str]] = None,
+              within_pct: Optional[float] = None, use_cache: bool = True) -> dict:
+    """Rank the universe by how close spot sits to its nearest OI wall.
+
+    Surfaces the pin setups the 0DTE strategy keys on: price parked at the call
+    wall (→ down/puts) or the put wall (→ up/calls), on the nearest expiry.
+    """
+    tickers = [t.upper() for t in (tickers or settings.scan_tickers)]
+    within = settings.wall_within_pct if within_pct is None else within_pct
+    key = (tuple(tickers), round(within, 4), "live" if settings.live else "mock")
+    now = time.time()
+    if use_cache:
+        with _wall_lock:
+            c = _wall_cache
+            if c["key"] == key and c["payload"] and now - c["ts"] < settings.scan_cache_seconds:
+                out = dict(c["payload"]); out["cached"] = True
+                out["age_seconds"] = round(now - c["ts"], 1)
+                return out
+
+    t0 = time.time()
+    results: List[ScanRow] = []
+    workers = max(1, min(settings.scan_workers, len(tickers)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        # week 0 (nearest expiry), no session cap — walls matter on the near chain.
+        futs = {pool.submit(evaluate, provider, t, 0, None): t for t in tickers}
+        for fut in as_completed(futs):
+            try:
+                results.append(fut.result())
+            except Exception as exc:  # pragma: no cover - defensive
+                results.append(ScanRow(ticker=futs[fut], spot=None, c_target=None,
+                                       edge_pct=None, direction=None, expiry=None,
+                                       dte=None, skip=f"error: {exc}"))
+
+    rows = [w for w in (_wall_row(r, within) for r in results) if w]
+    rows.sort(key=lambda w: (not w["at_wall"], w["dist_pct"]))   # at-wall first, then nearest
+    at_wall = [w for w in rows if w["at_wall"]]
+    skipped = [{"ticker": r.ticker, "reason": r.skip} for r in results
+               if r.skip and _wall_row(r, within) is None]
+
+    payload = {
+        "mode": "live" if settings.live else "mock",
+        "scanned": len(tickers),
+        "within_pct": within,
+        "at_wall": len(at_wall),
+        "elapsed_seconds": round(time.time() - t0, 2),
+        "results": rows,
+        "skipped": skipped,
+        "cached": False, "age_seconds": 0.0,
+    }
+    with _wall_lock:
+        _wall_cache.update(ts=time.time(), key=key, payload=payload)
+    return payload
+
+
 # ----- cached scan ----------------------------------------------------------
 _lock = threading.Lock()
 _cache: dict = {"ts": 0.0, "key": None, "payload": None}
