@@ -406,6 +406,62 @@ def max_pain_volume(rows: List[StrikeRow]) -> Optional[float]:
     return best_strike
 
 
+def classify_wall_type(rows: List[StrikeRow], strike: Optional[float], side: str,
+                       rel_thr: float = 0.04, min_oi: float = 250.0):
+    """Is the wall dealer-LONG gamma (a real "hard" wall) or dealer-SHORT gamma
+    (a "soft" wall that tends to break)?
+
+    We can't see aggressor flow, so we PROXY demand from IV richness at the wall
+    strike vs its local smile (the mean of the two neighbours each side):
+
+      * side IV poking ABOVE the smile → net BUYING of that side → dealer SHORT
+        → short gamma → **SOFT** wall (accelerates through / breaks).
+      * side IV pressed BELOW the smile → net SELLING / overwriting → dealer
+        LONG → long gamma → **HARD** wall (pins / holds).
+
+    Returns (label, detail) where label ∈ HARD / SOFT / NEUTRAL / n/a. It is a
+    proxy, not a true buy/sell tag — thin strikes and pin-risk can distort it, so
+    a liquidity floor and a threshold keep it honest (else NEUTRAL / n/a).
+    """
+    if strike is None:
+        return "n/a", {}
+    rows = sorted(rows, key=lambda r: r.strike)
+    idx = next((i for i, r in enumerate(rows) if abs(r.strike - strike) < 1e-6), None)
+    if idx is None:
+        return "n/a", {}
+
+    def _iv(r):
+        return (r.call_iv if side == "call" else r.put_iv) or 0.0
+
+    def _oi(r):
+        return (r.call_oi if side == "call" else r.put_oi) or 0.0
+
+    def _vol(r):
+        return (r.call_volume if side == "call" else r.put_volume) or 0.0
+
+    k_iv = _iv(rows[idx])
+    o = _oi(rows[idx])
+    if k_iv <= 0 or o < min_oi:
+        return "n/a", {}
+    neigh = [_iv(rows[j]) for j in (idx - 2, idx - 1, idx + 1, idx + 2)
+             if 0 <= j < len(rows) and _iv(rows[j]) > 0]
+    if len(neigh) < 2:
+        return "n/a", {}
+    base = sum(neigh) / len(neigh)
+    if base <= 0:
+        return "n/a", {}
+    resid = k_iv - base
+    rel = resid / base
+    fresh = _vol(rows[idx]) / max(o, 1.0)
+    other = (rows[idx].put_iv if side == "call" else rows[idx].call_iv) or 0.0
+    cp = (k_iv - other) if other > 0 else None
+    label = "SOFT" if rel >= rel_thr else "HARD" if rel <= -rel_thr else "NEUTRAL"
+    detail = {"wall_type": label, "iv": round(k_iv, 4), "smile": round(base, 4),
+              "iv_rel": round(rel, 4), "freshness": round(fresh, 2),
+              "cp_spread": round(cp, 4) if cp is not None else None}
+    return label, detail
+
+
 def compute(ticker: str, expiry: str, rows: List[StrikeRow], spot: Optional[float],
             t_years: float, dte: float, r: float = DEFAULT_RATE,
             fallback_iv: float = DEFAULT_IV, volume_weight: float = 0.0,

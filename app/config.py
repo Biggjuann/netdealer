@@ -122,6 +122,9 @@ class Settings:
     # Wall scanner: a ticker counts as "at the wall" when spot is within this
     # fraction of its nearest OI wall (0.01 = 1%).
     wall_within_pct: float = field(default_factory=lambda: _float("WALL_WITHIN_PCT", 0.01))
+    # Wall-type (HARD/SOFT) proxy: the wall side's IV must sit at least this far
+    # (relative) above/below its local smile to read as SOFT/HARD (else NEUTRAL).
+    wall_iv_rel_thr: float = field(default_factory=lambda: _float("WALL_IV_REL_THR", 0.04))
 
     # ----- Range achievability filter (Biggjuann/Range methodology) --------
     # Drop scan candidates whose required move to C exceeds what the ticker has

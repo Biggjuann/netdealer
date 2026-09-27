@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.config import settings
-from app.net_dealer import StrikeRow, bs_price
+from app.net_dealer import StrikeRow, bs_price, classify_wall_type
 from app.providers.mock import MockChainProvider
 from app.scanner import (ScanRow, _best_contract, _wall_row, evaluate,
                          rank_contracts, run_scan, wall_scan)
@@ -164,6 +164,39 @@ def test_wall_row_through_and_far():
     # Spot far from either wall → at_wall=False.
     assert _wall_row(_row(100.0, 108.0, 92.0, 100.0), within=0.01)["at_wall"] is False
     print("ok  through-wall and far-from-wall flags")
+
+
+def _iv_rows(bump_at=None, bump=0.0, oi=5000.0):
+    """Flat 0.30 call-IV smile with an optional bump/dent at one strike."""
+    rows = []
+    for k in range(90, 111):
+        iv = 0.30 + (bump if k == bump_at else 0.0)
+        rows.append(StrikeRow(strike=float(k), call_oi=oi, put_oi=oi,
+                              call_volume=1000, put_volume=1000,
+                              call_iv=round(iv, 4), put_iv=0.30))
+    return rows
+
+
+def test_wall_type_soft_hard_neutral():
+    # Call IV poking ABOVE the smile at the wall → net buying → dealer short → SOFT.
+    soft, ds = classify_wall_type(_iv_rows(bump_at=105, bump=+0.05), 105.0, "call")
+    assert soft == "SOFT" and ds["iv_rel"] > 0
+    # Call IV pressed BELOW the smile → overwriting → dealer long → HARD.
+    hard, _ = classify_wall_type(_iv_rows(bump_at=105, bump=-0.05), 105.0, "call")
+    assert hard == "HARD"
+    # Flat smile → no read → NEUTRAL.
+    assert classify_wall_type(_iv_rows(), 105.0, "call")[0] == "NEUTRAL"
+    # Thin strike (below the OI floor) → n/a, not a guess.
+    assert classify_wall_type(_iv_rows(bump_at=105, bump=+0.05, oi=10.0), 105.0, "call")[0] == "n/a"
+    print(f"ok  wall type: bump→SOFT ({ds['iv_rel']*100:.0f}% rich), dent→HARD, flat→NEUTRAL, thin→n/a")
+
+
+def test_wall_scan_carries_wall_type():
+    prov = MockChainProvider()
+    d = wall_scan(prov, tickers=["NVDA", "AAPL", "SPY"], within_pct=0.05, use_cache=False)
+    for r in d["results"]:
+        assert "wall_type" in r        # HARD / SOFT / NEUTRAL / n/a / None
+    print("ok  wall scan rows carry a wall_type annotation")
 
 
 def test_wall_scan_sorted_at_wall_first():

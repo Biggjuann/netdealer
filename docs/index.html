@@ -134,6 +134,10 @@
   .reach.max{background:rgba(251,191,36,.16);color:var(--amber)}
   .reach.out{background:rgba(248,113,113,.16);color:var(--red)}
   .reach.na{background:rgba(126,138,163,.16);color:var(--muted)}
+  .wtype{font-size:9.5px;font-weight:800;letter-spacing:.4px;padding:2px 7px;border-radius:6px;cursor:help}
+  .wtype.hard{background:rgba(52,211,153,.16);color:var(--green)}
+  .wtype.soft{background:rgba(251,146,60,.18);color:#fb923c}
+  .wtype.neu{background:rgba(126,138,163,.16);color:var(--muted)}
   /* ---- 0DTE SPX trade ticket ---- */
   .sigbanner{display:flex;align-items:center;gap:18px;flex-wrap:wrap;border-radius:18px;
     padding:18px 22px;margin-bottom:16px;border:1px solid var(--line)}
@@ -429,14 +433,15 @@
     <div class="panel">
       <h3>At the wall <span style="color:var(--dim);text-transform:none;letter-spacing:0">— spot pinned to an OI wall, nearest expiry</span></h3>
       <p class="hint"><b>Wall</b> is the strike carrying the most open interest near price.
-        <b>Dist</b> is how far spot sits from it. <b>Pull</b> is the framework read (at resistance → down, at support → up),
-        <b>Trade</b> the side that rides toward C, and <b>C✓</b> means the net-dealer C sits on that same side (a stronger setup).
-        <span style="color:var(--amber)">⚠ through</span> = price has broken past the wall (pin likely failed). <b>Not financial advice.</b></p>
+        <b>Type</b> reads whether the wall is dealer-<b>long</b> gamma (<span style="color:var(--green)">HARD</span> — IV cheap vs the smile → overwriting/selling → real wall that <b>holds</b>, favours fades / credit spreads) or dealer-<b>short</b> gamma
+        (<span style="color:#fb923c">SOFT</span> — IV rich → buying → a magnet that tends to <b>break</b>, favours long options through it); it's an IV-richness proxy, not a true flow tag.
+        <b>Pull</b> is the framework read (resistance → down, support → up), <b>Trade</b> the side that rides toward C, and <b>C✓</b> means C sits on that side.
+        <span style="color:var(--amber)">⚠ through</span> = price has broken past the wall. <b>Not financial advice.</b></p>
       <div style="overflow-x:auto">
         <table class="scan" id="wallTable">
           <thead><tr>
             <th class="l">#</th><th class="l">Ticker</th><th>Spot</th><th>Wall</th><th>Side</th>
-            <th>Dist</th><th>Pull</th><th>Trade</th><th>C</th><th>C✓</th>
+            <th>Type</th><th>Dist</th><th>Pull</th><th>Trade</th><th>C</th><th>C✓</th>
             <th>Conf</th><th>Exp</th>
           </tr></thead>
           <tbody id="wallBody"></tbody>
@@ -896,6 +901,7 @@ function renderWalls(d){
       + `<td>${fmt(r.spot, r.spot>=100?0:2)}</td>`
       + `<td>${fmt(r.wall, r.wall>=100?0:2)} ${wallTag}</td>`
       + `<td class="${r.wall_side==='CALL'?'sideCall':'sidePut'}">${r.wall_side}${thru}</td>`
+      + `<td>${wallTypeBadge(r.wall_type, r.wall_iv_rel)}</td>`
       + `<td class="${distCls}">${(r.dist_pct*100).toFixed(2)}%</td>`
       + `<td class="${pullCls}">${r.pull==='UP'?'▲':'▼'} ${r.pull}</td>`
       + `<td class="${tradeCls}">${r.trade_side}</td>`
@@ -1235,6 +1241,13 @@ function reachBadge(conf){
   if(conf==="within-max")  return `<span class="reach max" title="within the 30d MAX (widest) daily range, above the mean">MAX</span>`;
   if(conf==="out-of-range")return `<span class="reach out" title="move to C exceeds the ticker's proven 30d range">OUT</span>`;
   return `<span class="reach na" title="range data unavailable">n/a</span>`;
+}
+function wallTypeBadge(t, rel){
+  const richPct = rel!=null ? `${rel>=0?"+":""}${(rel*100).toFixed(0)}% vs smile` : "";
+  if(t==="SOFT") return `<span class="wtype soft" title="Wall side's IV is RICH vs the local smile (${richPct}) → net buying → dealer short gamma → tends to BREAK (magnet, calls run through)">SOFT</span>`;
+  if(t==="HARD") return `<span class="wtype hard" title="Wall side's IV is CHEAP vs the local smile (${richPct}) → selling/overwriting → dealer long gamma → real wall, HOLDS (fade / credit spreads)">HARD</span>`;
+  if(t==="NEUTRAL") return `<span class="wtype neu" title="IV in line with the smile — no clear buying/selling read">NEU</span>`;
+  return `<span class="wtype neu" title="not enough liquidity / data to read the wall type">—</span>`;
 }
 function confBadge(v){
   if(v==null) return `<span class="reach na">—</span>`;
