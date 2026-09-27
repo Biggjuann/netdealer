@@ -35,7 +35,7 @@ import datetime as _dt
 
 from app.config import settings
 from app.market_calendar import sessions_to_expiry
-from app.net_dealer import compute, setup_confidence
+from app.net_dealer import classify_wall_type, compute, setup_confidence
 from app.range_stats import compute_range
 from app.timeutil import t_years
 
@@ -62,6 +62,11 @@ class ScanRow:
     max_pain: Optional[float] = None
     call_wall: Optional[float] = None
     put_wall: Optional[float] = None
+    # wall-type proxy: HARD (dealer long → holds) / SOFT (dealer short → breaks)
+    call_wall_type: Optional[str] = None
+    put_wall_type: Optional[str] = None
+    call_wall_iv_rel: Optional[float] = None
+    put_wall_iv_rel: Optional[float] = None
     # --- range achievability (Biggjuann/Range 30d ADR / widest) ---
     required_move_pct: Optional[float] = None   # |C - spot| / spot
     adr_percent: Optional[float] = None         # 30d mean daily range %
@@ -225,6 +230,16 @@ def evaluate(provider, ticker: str, week_index: int = 0,
                    edge_pct=None, direction=None, expiry=expiry, dte=round(dte, 2),
                    sessions=sess, week_index=week_index,
                    max_pain=res.max_pain, call_wall=res.call_wall, put_wall=res.put_wall)
+    # Wall-type proxy (HARD/SOFT) from IV richness at each wall — computed here so
+    # it is available even when the row is not a ranked opportunity.
+    if res.call_wall is not None:
+        base.call_wall_type, _cd = classify_wall_type(
+            rows, res.call_wall, "call", rel_thr=settings.wall_iv_rel_thr)
+        base.call_wall_iv_rel = _cd.get("iv_rel")
+    if res.put_wall is not None:
+        base.put_wall_type, _pd = classify_wall_type(
+            rows, res.put_wall, "put", rel_thr=settings.wall_iv_rel_thr)
+        base.put_wall_iv_rel = _pd.get("iv_rel")
     if c is None or not spot:
         base.skip = "no C target"
         return base
@@ -306,11 +321,13 @@ def _wall_row(r: ScanRow, within: float) -> Optional[dict]:
         through = spot > wall                       # broke above resistance
         pull, trade_side = "DOWN", "PUT"
         c_confirms = r.c_target is not None and r.c_target < spot
+        wall_type, wall_iv_rel = r.call_wall_type, r.call_wall_iv_rel
     else:
         wall_side, wall, dist = "PUT", r.put_wall, d_put
         through = spot < wall                       # broke below support
         pull, trade_side = "UP", "CALL"
         c_confirms = r.c_target is not None and r.c_target > spot
+        wall_type, wall_iv_rel = r.put_wall_type, r.put_wall_iv_rel
     return {
         "ticker": r.ticker, "spot": round(spot, 2), "c_target": r.c_target,
         "expiry": r.expiry, "dte": r.dte, "sessions": r.sessions,
@@ -318,6 +335,7 @@ def _wall_row(r: ScanRow, within: float) -> Optional[dict]:
         "wall_side": wall_side, "wall": wall,
         "dist_pct": round(dist, 4), "at_wall": dist <= within, "through": through,
         "pull": pull, "trade_side": trade_side, "c_confirms": c_confirms,
+        "wall_type": wall_type, "wall_iv_rel": wall_iv_rel,
         "confidence": r.confidence, "crush_direction": r.crush_direction,
         "volume_bias": r.volume_bias,
     }
