@@ -490,6 +490,25 @@
       </div>
       <div class="skips" id="csSkips"></div>
     </div>
+
+    <div class="panel" id="csTracker" style="display:none">
+      <h3>Tracked trades <span style="color:var(--dim);text-transform:none;letter-spacing:0">— tick "In?" on a spread to track it (saved on this device)</span></h3>
+      <div class="lvlgrid" id="csScore" style="margin-bottom:14px"></div>
+      <div style="overflow-x:auto">
+        <table class="scan" id="csTrackTable">
+          <thead><tr>
+            <th class="l">Opened</th><th class="l">Ticker</th><th>Spread</th><th>Short / Long</th>
+            <th>Entry cr.</th><th>Now</th><th>Qty</th><th>Status</th><th>P&amp;L $</th><th>Exit</th><th></th>
+          </tr></thead>
+          <tbody id="csTrackBody"></tbody>
+        </table>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+        <button class="gear" id="csExport">Export CSV</button>
+        <button class="gear" id="csClear">Clear closed</button>
+      </div>
+      <div class="skips" id="csTrackEmpty"></div>
+    </div>
   </div><!-- /spreadsView -->
 
   <div id="journalView" style="display:none">
@@ -1298,16 +1317,42 @@ function wallTypeBadge(t, rel){
   return `<span class="wtype neu" title="not enough liquidity / data to read the wall type">—</span>`;
 }
 // ---- Credit spreads (IV-wall strategy) ----
-const CS_KEY="netdealer_spreads_input", CS_IN_KEY="netdealer_spreads_entered";
+const CS_KEY="netdealer_spreads_input", CS_OPEN_KEY="netdealer_spreads_open", CS_CLOSED_KEY="netdealer_spreads_closed";
 let CS_DATA=[], CS_TIMER=null, CS_LOADED=false;
-function csEntered(){ try{ return JSON.parse(localStorage.getItem(CS_IN_KEY))||{}; }catch(e){ return {}; } }
-function csSetEntered(id,on){ const m=csEntered(); if(on)m[id]=Date.now(); else delete m[id]; try{ localStorage.setItem(CS_IN_KEY,JSON.stringify(m)); }catch(e){} }
+function _lsGet(k,def){ try{ return JSON.parse(localStorage.getItem(k)) ?? def; }catch(e){ return def; } }
+function _lsSet(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){} }
+function csOpen(){ return _lsGet(CS_OPEN_KEY,{}); }         // {id: record}
+function csClosed(){ return _lsGet(CS_CLOSED_KEY,[]); }
 function csKey(t,side,exp){ return `${t}|${side}|${exp||""}`; }
+function csFindSpread(id){
+  for(const d of (CS_DATA||[])){ if(d.error) continue;
+    for(const k of ["put_spread","call_spread"]){ const s=d[k]; if(s && csKey(d.ticker,s.side,d.expiry)===id) return {d,s}; } }
+  return null;
+}
+function csTrack(id){
+  const hit=csFindSpread(id); if(!hit) return;
+  const {d,s}=hit; const m=csOpen();
+  m[id]={ id, ts:Date.now(), ticker:d.ticker, side:s.side, expiry:d.expiry,
+    short_strike:s.short_strike, long_strike:s.long_strike, width:s.width,
+    entry_credit:(s.credit!=null?s.credit:s.enter_credit), qty:s.contracts,
+    wall_low:s.wall_low, wall_high:s.wall_high, stop_level:s.stop_level };
+  _lsSet(CS_OPEN_KEY,m); renderTracker();
+}
+function csUntrack(id){ const m=csOpen(); delete m[id]; _lsSet(CS_OPEN_KEY,m); renderTracker(); }
+function csClose(id, exitCredit, outcome){
+  const m=csOpen(); const rec=m[id]; if(!rec) return;
+  const ex = exitCredit!=null ? exitCredit : 0;
+  rec.exit_credit=ex; rec.outcome=outcome||"manual"; rec.closed_ts=Date.now();
+  rec.pnl=Math.round((rec.entry_credit - ex)*100*rec.qty);
+  const arr=csClosed(); arr.unshift(rec); _lsSet(CS_CLOSED_KEY,arr);
+  delete m[id]; _lsSet(CS_OPEN_KEY,m); renderTracker(); renderSpreads();
+}
 
 function initSpreads(){
   if(CS_LOADED) return;
-  const saved=(()=>{ try{ return localStorage.getItem(CS_KEY); }catch(e){ return null; } })();
+  const saved=_lsGet(CS_KEY,null);
   if(saved && !$("csInput").value) $("csInput").value=saved;
+  renderTracker();
 }
 function parseWalls(text){
   const out=[]; const lines=text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
@@ -1353,13 +1398,13 @@ function csDisplayState(s, entered){
   return "WATCH";
 }
 function renderSpreads(){
-  const rows=[]; const errs=[];
+  const rows=[]; const errs=[]; const open=csOpen();
   (CS_DATA||[]).forEach(d=>{
     if(d.error){ errs.push(d.ticker+" ("+d.error+")"); return; }
     ["put_spread","call_spread"].forEach(key=>{
       const s=d[key]; if(!s) return;
       const id=csKey(d.ticker,s.side,d.expiry);
-      const entered=!!csEntered()[id];
+      const entered=!!open[id];
       rows.push({d,s,id,entered,disp:csDisplayState(s,entered)});
     });
   });
@@ -1376,11 +1421,7 @@ function renderSpreads(){
     const spreadLbl = s.side==="PUT" ? "PUT credit" : "CALL credit";
     const spreadCls = s.side==="PUT" ? "sideCall" : "sidePut"; // bull put = green, bear call = red
     const cls = disp.replace(" ","").toLowerCase();
-    let riskRew = `$${fmtInt(s.max_risk)} / $${fmtInt(s.max_profit)}`;
-    if(entered && s.credit!=null){
-      const pnl=Math.round((s.enter_credit - s.credit)*100*s.contracts);
-      riskRew = `<b class="${pnl>=0?'edgeUp':'edgeDn'}">${pnl>=0?'+':''}$${fmtInt(Math.abs(pnl))}</b> <span style="color:var(--dim)">live</span>`;
-    }
+    const riskRew = `$${fmtInt(s.max_risk)} / $${fmtInt(s.max_profit)}`;   // tracker owns live P&L
     const creditTxt = s.credit==null ? "—"
       : `<b>$${fmt(s.credit)}</b> <span style="color:var(--dim)">/ $${fmt(s.enter_credit)}</span>`;
     const toWall = s.to_wall_pct!=null ? `${s.to_wall_pct>=0?"":"▼ "}${(Math.abs(s.to_wall_pct)*100).toFixed(1)}%` : "";
@@ -1402,7 +1443,74 @@ function renderSpreads(){
   $("csSkips").textContent = errs.length ? "Couldn't price: "+errs.join(", ") : "";
   if(!show.length) $("csSkips").textContent = inPlayOnly
     ? "Nothing in play right now (all WAIT). Uncheck 'in-play only' to see every spread." : "No rows.";
+  renderTracker();
 }
+
+// live status for an open tracked trade, from the current monitor data
+function csLiveStatus(rec){
+  const hit=csFindSpread(rec.id); const s=hit&&hit.s;
+  const cur = s ? s.credit : null;
+  let status="OPEN";
+  if(s){
+    if(s.broke) status="STOP";                       // 15m close beyond wall
+    else if(cur!=null && cur<=s.take_profit) status="TAKE PROFIT";
+  }
+  const pnl = cur!=null ? Math.round((rec.entry_credit-cur)*100*rec.qty) : null;
+  return {cur, status, pnl};
+}
+function renderTracker(){
+  const open=Object.values(csOpen()), closed=csClosed();
+  $("csTracker").style.display = (open.length||closed.length) ? "" : "none";
+  // scorecard (closed realized + open live)
+  const realized=closed.reduce((t,r)=>t+(r.pnl||0),0);
+  const wins=closed.filter(r=>r.pnl>0).length, losses=closed.filter(r=>r.pnl<=0).length;
+  const winRate=closed.length?Math.round(wins/closed.length*100):null;
+  let openPnl=0; open.forEach(r=>{ const l=csLiveStatus(r); if(l.pnl!=null) openPnl+=l.pnl; });
+  const money=(x)=>x==null?"—":(x<0?"-$":"$")+Math.abs(x).toLocaleString();
+  const tile=(k,v,d2,cls)=>`<div class="lvl"><div class="k">${k}</div><div class="v mono ${cls||''}">${v}</div><div class="d">${d2||""}</div></div>`;
+  $("csScore").innerHTML =
+    tile("Realized P&L",money(realized),`${closed.length} closed`,realized>0?"dn":(realized<0?"up":""))
+    + tile("Open P&L (live)",money(openPnl),`${open.length} open`,openPnl>0?"dn":(openPnl<0?"up":""))
+    + tile("Win rate",winRate==null?"—":winRate+"%",`${wins}W / ${losses}L`)
+    + tile("Total",money(realized+openPnl),"realized + open");
+  const body=$("csTrackBody"); body.innerHTML="";
+  const row=(r,isOpen)=>{
+    const tr=document.createElement("tr");
+    const when=new Date(r.ts).toLocaleString(undefined,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
+    const sideCls=r.side==="PUT"?"sideCall":"sidePut";
+    let nowC,status,pnl,exitCell,actions,stCls;
+    if(isOpen){
+      const l=csLiveStatus(r); nowC=l.cur!=null?`$${fmt(l.cur)}`:"—"; status=l.status; pnl=l.pnl;
+      stCls = status==="STOP"?"stop":(status==="TAKE PROFIT"?"tp":"manage");
+      exitCell=`<input type="number" step="0.01" id="csx_${r.id}" placeholder="$ to close" style="width:84px">`;
+      const auto = (status==="STOP"||status==="TAKE PROFIT");
+      actions=`<button class="jbtn settle" data-csact="close" data-csid="${r.id}">Close${auto?" ✓":""}</button> `
+             +`<button class="jbtn del" data-csact="untrack" data-csid="${r.id}">✕</button>`;
+    } else {
+      nowC=`$${fmt(r.exit_credit)}`; status=(r.outcome||"manual").toUpperCase().replace("_"," "); pnl=r.pnl;
+      stCls = r.pnl>0?"tp":"stop"; exitCell=`$${fmt(r.exit_credit)}`;
+      actions=`<button class="jbtn del" data-csact="rm" data-csid="${r.closed_ts}">✕</button>`;
+    }
+    const pnlCls=pnl>0?"edgeUp":(pnl<0?"edgeDn":"");
+    tr.innerHTML =
+      `<td class="l" style="color:var(--muted)">${when}</td>`
+      + `<td class="l tk">${r.ticker}</td>`
+      + `<td class="${sideCls}">${r.side} credit</td>`
+      + `<td class="csleg">${fmtStrike(r.short_strike)} / ${fmtStrike(r.long_strike)}</td>`
+      + `<td>$${fmt(r.entry_credit)}</td>`
+      + `<td>${nowC}</td>`
+      + `<td>${r.qty}</td>`
+      + `<td><span class="cstate ${stCls}">${status}</span></td>`
+      + `<td class="${pnlCls}"><b>${pnl==null?"—":(pnl>0?"+":"")+("$"+Math.abs(pnl).toLocaleString())}</b></td>`
+      + `<td>${isOpen?exitCell:""}</td>`
+      + `<td>${actions}</td>`;
+    return tr;
+  };
+  open.sort((a,b)=>b.ts-a.ts).forEach(r=>body.appendChild(row(r,true)));
+  closed.forEach(r=>body.appendChild(row(r,false)));
+  $("csTrackEmpty").textContent = (open.length||closed.length) ? "" : "No tracked trades yet — tick \"In?\" on a spread above.";
+}
+
 function csSetAuto(on){
   if(CS_TIMER){ clearInterval(CS_TIMER); CS_TIMER=null; }
   if(on) CS_TIMER=setInterval(()=>{ if($("spreadsView").style.display!=="none") runSpreads(); }, 30000);
@@ -1502,8 +1610,31 @@ $("csInPlayOnly").addEventListener("change",()=>{ if(CS_DATA.length) renderSprea
 $("csAuto").addEventListener("change",e=>csSetAuto(e.target.checked));
 $("csBody").addEventListener("change",e=>{
   const cb=e.target.closest("input[data-csid]"); if(!cb) return;
-  csSetEntered(cb.getAttribute("data-csid"), cb.checked); renderSpreads();
+  if(cb.checked) csTrack(cb.getAttribute("data-csid")); else csUntrack(cb.getAttribute("data-csid"));
+  renderSpreads();
 });
+$("csTrackBody").addEventListener("click",e=>{
+  const b=e.target.closest("[data-csact]"); if(!b) return;
+  const id=b.getAttribute("data-csid"), act=b.getAttribute("data-csact");
+  if(act==="close"){
+    const inp=$("csx_"+id); let ex=inp&&inp.value!=="" ? parseFloat(inp.value) : null;
+    const hit=csFindSpread(id); if(ex==null && hit) ex=hit.s.credit;          // default: current credit
+    if(ex==null||isNaN(ex)){ alert("Enter the credit you closed for (or let it use the live credit)."); return; }
+    const l=hit?csLiveStatus(csOpen()[id]):null;
+    csClose(id, ex, l&&l.status==="STOP"?"stop":(l&&l.status==="TAKE PROFIT"?"take_profit":"manual"));
+  } else if(act==="untrack"){ csUntrack(id); renderSpreads(); }
+  else if(act==="rm"){ const arr=csClosed().filter(r=>String(r.closed_ts)!==id); _lsSet(CS_CLOSED_KEY,arr); renderTracker(); }
+});
+$("csExport").addEventListener("click",()=>{
+  const rows=csClosed().concat(Object.values(csOpen()).map(r=>({...r,status:"open"})));
+  if(!rows.length){ alert("No tracked trades to export."); return; }
+  const cols=["ts","ticker","side","expiry","short_strike","long_strike","width","entry_credit","qty","exit_credit","pnl","outcome","closed_ts"];
+  const esc=v=>{ v=(v==null?"":String(v)); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+  const csv=[cols.join(",")].concat(rows.map(r=>cols.map(c=>esc(r[c])).join(","))).join("\n");
+  const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+  a.download="credit_spreads_"+new Date().toISOString().slice(0,10)+".csv"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
+});
+$("csClear").addEventListener("click",()=>{ if(confirm("Clear all CLOSED tracked trades? (open trades stay)")){ _lsSet(CS_CLOSED_KEY,[]); renderTracker(); } });
 $("tabJournal").addEventListener("click",()=>showView("journal"));
 $("wallBtn").addEventListener("click",runWalls);
 $("wallBand").addEventListener("change",runWalls);

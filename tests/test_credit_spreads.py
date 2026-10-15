@@ -90,6 +90,20 @@ def test_take_profit_when_entered_and_credit_decays():
     print(f"ok  entered + credit {s['credit']} ≤ $0.10 → TAKE PROFIT")
 
 
+def test_stop_uses_15m_candle_close_not_spot():
+    rows = _rows(334.0)
+    # Live spot dipped below the wall, but the 15m candle CLOSED back inside →
+    # no stop yet (stop is on the candle close, not an intraday touch).
+    s = build_spread(rows, 331.0, "PUT", *AAPL_PW, width=2.5, enter_credit=1.0,
+                     take_profit=0.10, contracts=10, candle_close=333.5)
+    assert s["broke"] is False
+    # 15m candle closed below the wall → broke → AVOID (flat).
+    s2 = build_spread(rows, 334.0, "PUT", *AAPL_PW, width=2.5, enter_credit=1.0,
+                      take_profit=0.10, contracts=10, candle_close=331.0)
+    assert s2["broke"] is True and s2["state"] == "AVOID"
+    print("ok  stop keys off the 15m candle close, not an intraday touch")
+
+
 def test_evaluate_ticker_has_both_sides():
     d = evaluate_ticker(_rows(340.0), 340.0, *AAPL_CW, *AAPL_PW,
                         width=2.5, enter_credit=1.0, take_profit=0.10, contracts=10)

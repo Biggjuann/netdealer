@@ -94,6 +94,10 @@ class MockChainProvider:
             out.append((expiry, rows, spot))
         return out
 
+    def latest_15m_close(self, ticker: str, minutes: int = 15):
+        """Synthetic latest 15m close ~ the anchor price (offline/CI)."""
+        return _anchor_price(ticker)
+
     def daily_history(self, ticker: str, days: int) -> List[Candle]:
         """Deterministic synthetic daily candles with a realistic ADR + a clear
         widest session, so the range filter works offline / in CI."""

@@ -226,3 +226,32 @@ class SchwabChainClient:
         today = dt.datetime.now(tz=dt.timezone.utc).date()
         completed = [c for c in candles if c.date < today] or candles
         return completed[-need:]
+
+    def latest_15m_close(self, symbol: str, minutes: int = 15) -> Optional[float]:
+        """Close of the most recent completed intraday candle (for the stop rule).
+
+        Returns the last fully-closed ``minutes``-minute bar's close, or None on
+        failure (caller falls back to live spot)."""
+        symbol = symbol.strip().upper()
+        r = self._get(f"{self.base}/marketdata/v1/pricehistory", params={
+            "symbol": symbol, "periodType": "day", "period": 1,
+            "frequencyType": "minute", "frequency": minutes,
+            "needExtendedHoursData": "false",
+        })
+        if r is None or r.status_code != 200:
+            return None
+        try:
+            candles = r.json().get("candles") or []
+        except Exception:  # pragma: no cover - network
+            return None
+        if not candles:
+            return None
+        now_ms = dt.datetime.now(tz=dt.timezone.utc).timestamp() * 1000
+        bar_ms = minutes * 60 * 1000
+        # last bar whose window has fully closed (start + width <= now)
+        closed = [c for c in candles if (c.get("datetime", 0) + bar_ms) <= now_ms]
+        bar = (closed or candles)[-1]
+        try:
+            return float(bar["close"])
+        except (KeyError, TypeError, ValueError):
+            return None
