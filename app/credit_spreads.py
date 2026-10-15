@@ -41,19 +41,26 @@ def _leg_price(rows: List[StrikeRow], strike: Optional[float], is_put: bool) -> 
 def build_spread(rows: List[StrikeRow], spot: float, side: str,
                  wall_low: float, wall_high: float,
                  width: float, enter_credit: float, take_profit: float,
-                 contracts: int, entered: bool = False) -> dict:
-    """Assemble one credit spread (side = 'PUT' or 'CALL') against its IV wall."""
+                 contracts: int, entered: bool = False,
+                 candle_close: Optional[float] = None) -> dict:
+    """Assemble one credit spread (side = 'PUT' or 'CALL') against its IV wall.
+
+    ``candle_close`` is the latest completed 15-minute candle close; the STOP
+    fires on that close beyond the wall (per the rule), not an intraday touch.
+    Falls back to live ``spot`` when no candle is available.
+    """
     is_put = side == "PUT"
+    close = candle_close if candle_close is not None else spot
     if is_put:
         long_strike = _nearest_strike(rows, wall_low)                 # outer (lower)
         short_strike = _nearest_strike(rows, (long_strike + width)) if long_strike is not None else None
         in_zone = spot <= wall_high                                   # price reached the wall
-        broke = spot < wall_low                                       # closed/trading below → stop
+        broke = close < wall_low                                      # 15m close below → stop
     else:
         long_strike = _nearest_strike(rows, wall_high)                # outer (upper)
         short_strike = _nearest_strike(rows, (long_strike - width)) if long_strike is not None else None
         in_zone = spot >= wall_low
-        broke = spot > wall_high
+        broke = close > wall_high                                     # 15m close above → stop
 
     long_px = _leg_price(rows, long_strike, is_put)
     short_px = _leg_price(rows, short_strike, is_put)
@@ -93,6 +100,7 @@ def build_spread(rows: List[StrikeRow], spot: float, side: str,
         "long_price": long_px, "short_price": short_px,
         "credit": credit,
         "in_zone": in_zone, "broke": broke, "tp_hit": tp_hit,
+        "candle_close": round(close, 2) if close is not None else None,
         "state": state,
         "enter_credit": enter_credit, "take_profit": take_profit,
         "contracts": contracts,
@@ -106,11 +114,13 @@ def evaluate_ticker(rows: List[StrikeRow], spot: float,
                     cw_low: float, cw_high: float,
                     pw_low: float, pw_high: float,
                     width: float, enter_credit: float, take_profit: float,
-                    contracts: int) -> dict:
+                    contracts: int, candle_close: Optional[float] = None) -> dict:
     """Both spreads for one ticker from its chain + IV walls."""
     return {
         "put_spread": build_spread(rows, spot, "PUT", pw_low, pw_high,
-                                   width, enter_credit, take_profit, contracts),
+                                   width, enter_credit, take_profit, contracts,
+                                   candle_close=candle_close),
         "call_spread": build_spread(rows, spot, "CALL", cw_low, cw_high,
-                                    width, enter_credit, take_profit, contracts),
+                                    width, enter_credit, take_profit, contracts,
+                                    candle_close=candle_close),
     }

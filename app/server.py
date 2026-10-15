@@ -303,12 +303,19 @@ def credit_spread(
     except (ValueError, TypeError):
         sess = None
     _ty, dte = t_years(exp)
+    # Stop fires on the latest 15-minute candle close beyond the wall.
+    try:
+        c15 = provider.latest_15m_close(ticker)
+    except Exception:  # pragma: no cover - network
+        c15 = None
     spreads = evaluate_ticker(rows, spot, cw_low, cw_high, pw_low, pw_high,
                               settings.cs_width, settings.cs_enter_credit,
-                              settings.cs_take_profit, settings.cs_contracts)
+                              settings.cs_take_profit, settings.cs_contracts,
+                              candle_close=c15)
     return JSONResponse({
         "ticker": ticker.upper(), "expiry": exp, "dte": round(dte, 2), "sessions": sess,
-        "spot": round(spot, 2), "mode": "live" if settings.live else "mock",
+        "spot": round(spot, 2), "candle_close": round(c15, 2) if c15 else None,
+        "mode": "live" if settings.live else "mock",
         **spreads,
     })
 
