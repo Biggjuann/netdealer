@@ -151,6 +151,18 @@
   #csTable tbody tr{cursor:default}
   #csTable tbody tr:hover{background:rgba(56,189,248,.05)}
   #csInput{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;color:var(--txt);font-size:12.5px;resize:vertical}
+  .calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
+  .calhead{font-size:10px;color:var(--muted);text-align:center;text-transform:uppercase;letter-spacing:.5px;padding:2px 0}
+  .calcell{min-height:50px;border:1px solid var(--line);border-radius:8px;padding:4px 6px;background:var(--panel);display:flex;flex-direction:column}
+  .calcell .cd{font-size:10px;color:var(--dim)}
+  .calcell .cp{font-size:12.5px;font-weight:800;margin-top:auto}
+  .calcell .cn{font-size:9px;color:var(--dim)}
+  .calcell.win{background:rgba(52,211,153,.14);border-color:rgba(52,211,153,.4)}
+  .calcell.win .cp{color:var(--green)}
+  .calcell.loss{background:rgba(248,113,113,.14);border-color:rgba(248,113,113,.4)}
+  .calcell.loss .cp{color:var(--red)}
+  .calcell.out{visibility:hidden}
+  .calcell.today{box-shadow:inset 0 0 0 1px var(--teal)}
   /* ---- 0DTE SPX trade ticket ---- */
   .sigbanner{display:flex;align-items:center;gap:18px;flex-wrap:wrap;border-radius:18px;
     padding:18px 22px;margin-bottom:16px;border:1px solid var(--line)}
@@ -511,6 +523,24 @@
         <button class="gear" id="csClear">Clear closed</button>
       </div>
       <div class="skips" id="csTrackEmpty"></div>
+    </div>
+
+    <div class="panel" id="csPerf" style="display:none">
+      <h3>Performance <span style="color:var(--dim);text-transform:none;letter-spacing:0">— realized P&amp;L from closed trades</span></h3>
+      <div class="profilewrap">
+        <svg class="profile" id="csEquity" style="height:200px" preserveAspectRatio="none"></svg>
+        <div class="charttip" id="csEquityTip"></div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin:16px 0 8px">
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="gear" id="csCalPrev">‹</button>
+          <b id="csCalMonth" class="mono" style="min-width:150px;text-align:center;display:inline-block">—</b>
+          <button class="gear" id="csCalNext">›</button>
+        </div>
+        <div class="hint" id="csCalSum" style="margin:0"></div>
+      </div>
+      <div class="calgrid" id="csCalHead"></div>
+      <div class="calgrid" id="csCal" style="margin-top:4px"></div>
     </div>
   </div><!-- /spreadsView -->
 
@@ -1540,7 +1570,7 @@ function renderTracker(){
   const body=$("csTrackBody"); body.innerHTML="";
   const row=(r,isOpen)=>{
     const tr=document.createElement("tr");
-    const when=new Date(r.ts).toLocaleString(undefined,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
+    const when=new Date(r.ts||r.closed_ts).toLocaleString(undefined,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
     const sideCls=r.side==="PUT"?"sideCall":"sidePut";
     let nowC,status,pnl,exitCell,actions,stCls;
     if(isOpen){
@@ -1573,6 +1603,86 @@ function renderTracker(){
   open.sort((a,b)=>b.ts-a.ts).forEach(r=>body.appendChild(row(r,true)));
   closed.forEach(r=>body.appendChild(row(r,false)));
   $("csTrackEmpty").textContent = (open.length||closed.length) ? "" : "No tracked trades yet — tick \"In?\" on a spread above.";
+  renderPerf();
+}
+
+// ---- Performance: equity curve + monthly P&L calendar ----
+let CS_CAL = null;    // {y, m} month being viewed (m = 0-11)
+function _dayKey(ts){ const d=new Date(ts); return d.getFullYear()+"-"+d.getMonth()+"-"+d.getDate(); }
+function renderPerf(){
+  const closed=csClosed().filter(r=>r.closed_ts && r.pnl!=null);
+  $("csPerf").style.display = closed.length ? "" : "none";
+  if(!closed.length) return;
+  if(!CS_CAL){ const n=new Date(); CS_CAL={y:n.getFullYear(), m:n.getMonth()}; }
+  drawEquity(closed);
+  drawCalendar(closed);
+}
+function drawEquity(closed){
+  const pts=closed.slice().sort((a,b)=>a.closed_ts-b.closed_ts);
+  let cum=0; const series=pts.map(r=>{ cum+=r.pnl; return {ts:r.closed_ts, cum, pnl:r.pnl}; });
+  const svg=$("csEquity"); svg.innerHTML=""; const NS="http://www.w3.org/2000/svg";
+  const W=1000,H=200,padL=8,padR=56,padT=14,padB=22;
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  const ys=series.map(s=>s.cum).concat([0]); let lo=Math.min(...ys), hi=Math.max(...ys);
+  const pad=(hi-lo)*0.15||10; lo-=pad; hi+=pad;
+  const n=series.length;
+  const x=i=> padL + (n<=1?0:i/(n-1))*(W-padL-padR);
+  const y=v=> padT + (1-(v-lo)/(hi-lo))*(H-padT-padB);
+  const mk=(t,a)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);svg.appendChild(e);return e;};
+  const txt=(tx,ty,s,fill,anc)=>{const e=mk("text",{x:tx,y:ty,fill:fill||"#7e8aa3","font-size":10,"text-anchor":anc||"start","font-family":"ui-monospace,monospace"});e.textContent=s;};
+  // zero line
+  if(lo<0&&hi>0){ mk("line",{x1:padL,y1:y(0),x2:W-padR,y2:y(0),stroke:"#2a3550","stroke-dasharray":"3 3"}); }
+  // area + line
+  const final=series[n-1].cum, col=final>=0?"#34d399":"#f87171";
+  let d="M"+x(0)+" "+y(series[0].cum); series.forEach((s,i)=>{ d+=" L"+x(i)+" "+y(s.cum); });
+  const area=d+` L${x(n-1)} ${y(lo)} L${x(0)} ${y(lo)} Z`;
+  mk("path",{d:area,fill:col,opacity:0.12});
+  mk("path",{d,fill:"none",stroke:col,"stroke-width":2});
+  series.forEach((s,i)=>mk("circle",{cx:x(i),cy:y(s.cum),r:2.5,fill:col}));
+  // right axis labels
+  txt(W-padR+6,y(hi)+4,(hi>=0?"+":"")+"$"+Math.round(hi),"#7e8aa3");
+  txt(W-padR+6,y(lo)+4,(lo>=0?"+":"")+"$"+Math.round(lo),"#7e8aa3");
+  txt(W-padR+6,y(final)+4,(final>=0?"+":"")+"$"+Math.round(final).toLocaleString(),col);
+  // hover
+  const tip=$("csEquityTip");
+  const hit=mk("rect",{x:0,y:0,width:W,height:H,fill:"transparent"});
+  hit.addEventListener("mousemove",ev=>{
+    const r=svg.getBoundingClientRect(); const px=(ev.clientX-r.left)/r.width*W;
+    let bi=0,bd=1e9; series.forEach((s,i)=>{const dd=Math.abs(x(i)-px);if(dd<bd){bd=dd;bi=i;}});
+    const s=series[bi]; const dt=new Date(s.ts).toLocaleDateString();
+    tip.style.display="block"; tip.style.left=Math.min(ev.clientX-r.left+12,r.width-150)+"px"; tip.style.top="8px";
+    tip.innerHTML=`<div class="k">${dt}</div>cum <b>${s.cum>=0?"+":""}$${Math.round(s.cum).toLocaleString()}</b> · trade <b>${s.pnl>=0?"+":""}$${Math.round(s.pnl).toLocaleString()}</b>`;
+  });
+  hit.addEventListener("mouseleave",()=>tip.style.display="none");
+}
+const CS_DOW=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const CS_MON=["January","February","March","April","May","June","July","August","September","October","November","December"];
+function drawCalendar(closed){
+  const {y,m}=CS_CAL;
+  $("csCalMonth").textContent = CS_MON[m]+" "+y;
+  $("csCalHead").innerHTML = CS_DOW.map(d=>`<div class="calhead">${d}</div>`).join("");
+  // bucket pnl + count by day for this month
+  const byDay={}, cntDay={};
+  closed.forEach(r=>{ const d=new Date(r.closed_ts); if(d.getFullYear()===y&&d.getMonth()===m){
+    const k=d.getDate(); byDay[k]=(byDay[k]||0)+r.pnl; cntDay[k]=(cntDay[k]||0)+1; } });
+  const first=new Date(y,m,1).getDay(), days=new Date(y,m+1,0).getDate();
+  const now=new Date(), isThisMonth=(now.getFullYear()===y&&now.getMonth()===m);
+  let cells="";
+  for(let i=0;i<first;i++) cells+=`<div class="calcell out"></div>`;
+  let mTot=0, mWin=0, mN=0;
+  for(let dd=1;dd<=days;dd++){
+    const p=byDay[dd], n=cntDay[dd]||0;
+    let cls="calcell"; if(p!=null){ cls+=p>0?" win":(p<0?" loss":""); mTot+=p; mN+=n; if(p>0)mWin++; }
+    if(isThisMonth&&now.getDate()===dd) cls+=" today";
+    const pTxt = p!=null ? `<div class="cp">${p>0?"+":""}$${Math.abs(Math.round(p)).toLocaleString()}</div><div class="cn">${n} trade${n!==1?"s":""}</div>` : "";
+    cells+=`<div class="${cls}"><div class="cd">${dd}</div>${pTxt}</div>`;
+  }
+  $("csCal").innerHTML=cells;
+  const money=x=>(x<0?"-$":"$")+Math.abs(Math.round(x)).toLocaleString();
+  const dpWin = Object.values(byDay).filter(v=>v>0).length, dpTot=Object.keys(byDay).length;
+  $("csCalSum").innerHTML = dpTot
+    ? `Month: <b class="${mTot>=0?'edgeUp':'edgeDn'}">${mTot>=0?'+':''}${money(mTot)}</b> · ${mN} trades · ${dpWin}/${dpTot} green days`
+    : `No closed trades in ${CS_MON[m]} ${y}`;
 }
 
 function csSetAuto(on){
@@ -1699,6 +1809,8 @@ $("csExport").addEventListener("click",()=>{
   a.download="credit_spreads_"+new Date().toISOString().slice(0,10)+".csv"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
 });
 $("csClear").addEventListener("click",()=>{ if(confirm("Clear all CLOSED tracked trades? (open trades stay)")){ csClearClosed(); } });
+$("csCalPrev").addEventListener("click",()=>{ if(!CS_CAL)return; CS_CAL.m--; if(CS_CAL.m<0){CS_CAL.m=11;CS_CAL.y--;} renderPerf(); });
+$("csCalNext").addEventListener("click",()=>{ if(!CS_CAL)return; CS_CAL.m++; if(CS_CAL.m>11){CS_CAL.m=0;CS_CAL.y++;} renderPerf(); });
 $("tabJournal").addEventListener("click",()=>showView("journal"));
 $("wallBtn").addEventListener("click",runWalls);
 $("wallBand").addEventListener("change",runWalls);
