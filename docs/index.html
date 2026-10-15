@@ -144,6 +144,8 @@
   .cstate.watch{background:rgba(251,191,36,.18);color:var(--amber)}
   .cstate.tp{background:var(--teal);color:#04140f}
   .cstate.stop,.cstate.avoid{background:rgba(248,113,113,.2);color:var(--red)}
+  .cstate.closeeod{background:var(--amber);color:#1a1300}
+  .cstate.closed{background:rgba(126,138,163,.2);color:var(--muted)}
   .cstate.wait,.cstate.na{background:rgba(126,138,163,.16);color:var(--muted)}
   .csleg{font-family:ui-monospace,monospace;font-size:12px}
   #csTable tbody tr{cursor:default}
@@ -468,7 +470,8 @@
       <h3>IV-wall credit spreads <span style="color:var(--dim);text-transform:none;letter-spacing:0">— paste tickers + their IV walls</span></h3>
       <p class="hint">Format per ticker: a symbol line, then <span class="mono">Call IV Wall: low-high, true IV at x</span> and <span class="mono">Put IV Wall: low-high, true IV at x</span>.
         Rule: at the <b>put wall</b> → $<span id="csW">2.50</span>-wide <b>put credit spread</b> (long ≈ wall low, short = long+width); at the <b>call wall</b> → <b>call credit spread</b> (long ≈ wall high, short = long−width).
-        <b>Enter</b> when the net credit reaches $<span id="csEnter">1.00</span>, <b>stop</b> if price closes past the wall, <b>take profit</b> at $<span id="csTp">0.10</span>, always <span id="csQty">10</span> contracts. Credit is estimated from chain marks — a live broker quote differs. <b>Read-only, not financial advice.</b></p>
+        <b>Enter</b> when the net credit reaches $<span id="csEnter">1.00</span>, <b>stop</b> if a <b>15-min candle closes</b> past the wall, <b>take profit</b> at $<span id="csTp">0.10</span>, always <span id="csQty">10</span> contracts.
+        <b>RTH only</b> — close all open trades by <b>2:55pm CT</b> (5 min before the close). Credit is estimated from chain marks — a live broker quote differs. <b>Read-only, not financial advice.</b></p>
       <textarea id="csInput" class="mono" rows="6" style="width:100%;box-sizing:border-box" placeholder="$AAPL&#10;Call IV Wall: 345.56-350.07, true IV at 347.69&#10;Put IV Wall: 332.39-336.95, true IV at 334.74"></textarea>
       <div class="scanbar" style="margin-top:10px">
         <button id="csBtn" class="go">Load &amp; monitor</button>
@@ -1433,39 +1436,53 @@ async function runSpreads(){
   }catch(e){ msg("Spread load failed: "+e); }
   finally{ btn.disabled=false; btn.textContent=prev; }
 }
-const CS_PRIORITY={ENTER:0,"TAKE PROFIT":1,STOP:1,MANAGE:2,WATCH:3,AVOID:4,WAIT:5,"n/a":6};
-function csDisplayState(s, entered){
+const CS_PRIORITY={"CLOSE EOD":0,STOP:0,"TAKE PROFIT":1,ENTER:2,MANAGE:3,WATCH:4,AVOID:5,CLOSED:6,WAIT:7,"n/a":8};
+function csSession(){ const d=(CS_DATA||[]).find(x=>x&&x.session); return d?d.session:null; }
+function csDisplayState(s, entered, ses){
   if(!s || s.state==="n/a") return "n/a";
-  if(s.broke) return entered?"STOP":"AVOID";
-  if(entered && s.tp_hit) return "TAKE PROFIT";
+  const eod = ses && (!ses.is_rth || ses.force_close);   // RTH only; close all by 2:55pm CT
+  if(entered){
+    if(s.broke) return "STOP";
+    if(s.tp_hit) return "TAKE PROFIT";
+    if(eod) return "CLOSE EOD";
+    return "MANAGE";                                      // you're in it — manage to the rules
+  }
+  if(eod) return "CLOSED";                                // no new entries after hours / in the force-close window
+  if(s.broke) return "AVOID";
   if(!s.in_zone) return "WAIT";
-  if(s.credit!=null && s.credit>=s.enter_credit) return entered?"MANAGE":"ENTER";
+  if(s.credit!=null && s.credit>=s.enter_credit) return "ENTER";
   return "WATCH";
 }
 function renderSpreads(){
-  const rows=[]; const errs=[]; const open=csOpen();
+  const rows=[]; const errs=[]; const open=csOpen(); const ses=csSession();
   (CS_DATA||[]).forEach(d=>{
     if(d.error){ errs.push(d.ticker+" ("+d.error+")"); return; }
     ["put_spread","call_spread"].forEach(key=>{
       const s=d[key]; if(!s) return;
       const id=csKey(d.ticker,s.side,d.expiry);
       const entered=!!open[id];
-      rows.push({d,s,id,entered,disp:csDisplayState(s,entered)});
+      rows.push({d,s,id,entered,disp:csDisplayState(s,entered,ses)});
     });
   });
   const inPlayOnly=$("csInPlayOnly").checked;
-  let show=inPlayOnly ? rows.filter(r=>r.entered || (r.disp!=="WAIT" && r.disp!=="n/a")) : rows;
+  let show=inPlayOnly ? rows.filter(r=>r.entered || (r.disp!=="WAIT" && r.disp!=="n/a" && r.disp!=="CLOSED")) : rows;
   show.sort((a,b)=>(CS_PRIORITY[a.disp]??9)-(CS_PRIORITY[b.disp]??9) || a.d.ticker.localeCompare(b.d.ticker));
   $("csResults").style.display = "";
   const nEnter=rows.filter(r=>r.disp==="ENTER").length, nWatch=rows.filter(r=>r.disp==="WATCH").length;
+  let sesTxt;
+  if(!ses) sesTxt = "";
+  else if(!ses.is_rth) sesTxt = ` · <span style="color:var(--red)">● CLOSED — RTH only (opens 8:30am CT)</span>`;
+  else if(ses.force_close) sesTxt = ` · <span style="color:var(--red)">● FORCE-CLOSE — close all open trades (2:55pm CT)</span>`;
+  else { const m=ses.minutes_to_force_close; const h=Math.floor(m/60), mm=Math.round(m%60);
+    sesTxt = ` · <span style="color:var(--green)">● RTH</span> · force-close in ${h>0?h+"h":""}${mm}m (2:55pm CT)`; }
   $("csSum").innerHTML = `<b>${CS_DATA.length}</b> tickers · <span style="color:var(--green)"><b>${nEnter}</b> ENTER</span> · <span style="color:var(--amber)"><b>${nWatch}</b> WATCH</span> · showing <b>${show.length}</b>`
-    + ` · <span style="color:var(--muted)">${((CS_DATA[0]&&CS_DATA[0].mode)||"").toUpperCase()} · ${new Date().toLocaleTimeString()}</span>`;
+    + sesTxt + ` · <span style="color:var(--muted)">${((CS_DATA[0]&&CS_DATA[0].mode)||"").toUpperCase()} · ${new Date().toLocaleTimeString()}</span>`;
   const body=$("csBody"); body.innerHTML="";
   show.forEach(({d,s,id,entered,disp})=>{
     const tr=document.createElement("tr");
     const spreadLbl = s.side==="PUT" ? "PUT credit" : "CALL credit";
     const spreadCls = s.side==="PUT" ? "sideCall" : "sidePut"; // bull put = green, bear call = red
-    const cls = disp.replace(" ","").toLowerCase();
+    const cls = ({ENTER:"enter",WATCH:"watch",WAIT:"wait",AVOID:"avoid",STOP:"stop",MANAGE:"manage","TAKE PROFIT":"tp","CLOSE EOD":"closeeod",CLOSED:"closed"})[disp]||"na";
     const riskRew = `$${fmtInt(s.max_risk)} / $${fmtInt(s.max_profit)}`;   // tracker owns live P&L
     const creditTxt = s.credit==null ? "—"
       : `<b>$${fmt(s.credit)}</b> <span style="color:var(--dim)">/ $${fmt(s.enter_credit)}</span>`;
@@ -1493,13 +1510,12 @@ function renderSpreads(){
 
 // live status for an open tracked trade, from the current monitor data
 function csLiveStatus(rec){
-  const hit=csFindSpread(rec.id); const s=hit&&hit.s;
+  const hit=csFindSpread(rec.id); const s=hit&&hit.s; const ses=csSession();
   const cur = s ? s.credit : null;
   let status="OPEN";
-  if(s){
-    if(s.broke) status="STOP";                       // 15m close beyond wall
-    else if(cur!=null && cur<=s.take_profit) status="TAKE PROFIT";
-  }
+  if(s && s.broke) status="STOP";                           // 15m close beyond wall
+  else if(s && cur!=null && cur<=s.take_profit) status="TAKE PROFIT";
+  else if(ses && (!ses.is_rth || ses.force_close)) status="CLOSE EOD";   // RTH only, out by 2:55pm CT
   const pnl = cur!=null ? Math.round((rec.entry_credit-cur)*100*rec.qty) : null;
   return {cur, status, pnl};
 }
@@ -1529,9 +1545,9 @@ function renderTracker(){
     let nowC,status,pnl,exitCell,actions,stCls;
     if(isOpen){
       const l=csLiveStatus(r); nowC=l.cur!=null?`$${fmt(l.cur)}`:"—"; status=l.status; pnl=l.pnl;
-      stCls = status==="STOP"?"stop":(status==="TAKE PROFIT"?"tp":"manage");
+      stCls = status==="STOP"?"stop":(status==="TAKE PROFIT"?"tp":(status==="CLOSE EOD"?"closeeod":"manage"));
       exitCell=`<input type="number" step="0.01" id="csx_${r.id}" placeholder="$ to close" style="width:84px">`;
-      const auto = (status==="STOP"||status==="TAKE PROFIT");
+      const auto = (status==="STOP"||status==="TAKE PROFIT"||status==="CLOSE EOD");
       actions=`<button class="jbtn settle" data-csact="close" data-csid="${r.id}">Close${auto?" ✓":""}</button> `
              +`<button class="jbtn del" data-csact="untrack" data-csid="${r.id}">✕</button>`;
     } else {
@@ -1669,7 +1685,7 @@ $("csTrackBody").addEventListener("click",e=>{
     const hit=csFindSpread(id); if(ex==null && hit) ex=hit.s.credit;          // default: current credit
     if(ex==null||isNaN(ex)){ alert("Enter the credit you closed for (or let it use the live credit)."); return; }
     const l=hit?csLiveStatus(csOpen()[id]):null;
-    csClose(id, ex, l&&l.status==="STOP"?"stop":(l&&l.status==="TAKE PROFIT"?"take_profit":"manual"));
+    csClose(id, ex, l&&l.status==="STOP"?"stop":(l&&l.status==="TAKE PROFIT"?"take_profit":(l&&l.status==="CLOSE EOD"?"eod":"manual")));
   } else if(act==="untrack"){ csUntrack(id); renderSpreads(); }
   else if(act==="rm"){ const rec=CS_STORE.closed.find(r=>String(r.closed_ts)===id); CS_STORE.closed=CS_STORE.closed.filter(r=>String(r.closed_ts)!==id); csPersistLocal(); renderTracker(); if(rec) csServerDel(rec.id); }
 });

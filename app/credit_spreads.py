@@ -23,6 +23,19 @@ from typing import List, Optional
 from app.net_dealer import StrikeRow
 
 
+def session_flags(is_open: bool, minutes_to_close: Optional[float],
+                  force_close_min: int) -> dict:
+    """RTH + force-close flags: trades are RTH only and closed ``force_close_min``
+    before the session close (5 → 2:55pm CT / 3:55pm ET)."""
+    is_rth = bool(is_open)
+    force_close = bool(is_rth and minutes_to_close is not None
+                       and minutes_to_close <= force_close_min)
+    mtfc = (round(minutes_to_close - force_close_min, 1)
+            if (is_rth and minutes_to_close is not None) else None)
+    return {"is_rth": is_rth, "force_close": force_close,
+            "minutes_to_force_close": mtfc, "force_close_min": force_close_min}
+
+
 def _nearest_strike(rows: List[StrikeRow], target: float) -> Optional[float]:
     ks = [r.strike for r in rows if r.strike > 0]
     return min(ks, key=lambda k: abs(k - target)) if ks else None
