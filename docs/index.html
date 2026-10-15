@@ -138,6 +138,17 @@
   .wtype.hard{background:rgba(52,211,153,.16);color:var(--green)}
   .wtype.soft{background:rgba(251,146,60,.18);color:#fb923c}
   .wtype.neu{background:rgba(126,138,163,.16);color:var(--muted)}
+  .cstate{font-size:9.5px;font-weight:800;letter-spacing:.4px;padding:2px 8px;border-radius:6px;white-space:nowrap}
+  .cstate.enter{background:var(--green);color:#04140f}
+  .cstate.manage{background:rgba(56,189,248,.18);color:var(--blue)}
+  .cstate.watch{background:rgba(251,191,36,.18);color:var(--amber)}
+  .cstate.tp{background:var(--teal);color:#04140f}
+  .cstate.stop,.cstate.avoid{background:rgba(248,113,113,.2);color:var(--red)}
+  .cstate.wait,.cstate.na{background:rgba(126,138,163,.16);color:var(--muted)}
+  .csleg{font-family:ui-monospace,monospace;font-size:12px}
+  #csTable tbody tr{cursor:default}
+  #csTable tbody tr:hover{background:rgba(56,189,248,.05)}
+  #csInput{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;color:var(--txt);font-size:12.5px;resize:vertical}
   /* ---- 0DTE SPX trade ticket ---- */
   .sigbanner{display:flex;align-items:center;gap:18px;flex-wrap:wrap;border-radius:18px;
     padding:18px 22px;margin-bottom:16px;border:1px solid var(--line)}
@@ -215,6 +226,7 @@
     <button class="tab" id="tabMap" data-view="map">🗺️ Daily Map</button>
     <button class="tab" id="tabSpx" data-view="spx">⚡ 0DTE SPX</button>
     <button class="tab" id="tabWalls" data-view="walls">🧱 Wall Scanner</button>
+    <button class="tab" id="tabSpreads" data-view="spreads">📐 Credit Spreads</button>
     <button class="tab" id="tabJournal" data-view="journal">📓 Journal</button>
   </div>
   <div id="msg"></div>
@@ -450,6 +462,35 @@
       <div class="skips" id="wallSkips"></div>
     </div>
   </div><!-- /wallsView -->
+
+  <div id="spreadsView" style="display:none">
+    <div class="panel">
+      <h3>IV-wall credit spreads <span style="color:var(--dim);text-transform:none;letter-spacing:0">— paste tickers + their IV walls</span></h3>
+      <p class="hint">Format per ticker: a symbol line, then <span class="mono">Call IV Wall: low-high, true IV at x</span> and <span class="mono">Put IV Wall: low-high, true IV at x</span>.
+        Rule: at the <b>put wall</b> → $<span id="csW">2.50</span>-wide <b>put credit spread</b> (long ≈ wall low, short = long+width); at the <b>call wall</b> → <b>call credit spread</b> (long ≈ wall high, short = long−width).
+        <b>Enter</b> when the net credit reaches $<span id="csEnter">1.00</span>, <b>stop</b> if price closes past the wall, <b>take profit</b> at $<span id="csTp">0.10</span>, always <span id="csQty">10</span> contracts. Credit is estimated from chain marks — a live broker quote differs. <b>Read-only, not financial advice.</b></p>
+      <textarea id="csInput" class="mono" rows="6" style="width:100%;box-sizing:border-box" placeholder="$AAPL&#10;Call IV Wall: 345.56-350.07, true IV at 347.69&#10;Put IV Wall: 332.39-336.95, true IV at 334.74"></textarea>
+      <div class="scanbar" style="margin-top:10px">
+        <button id="csBtn" class="go">Load &amp; monitor</button>
+        <label class="scanopt"><input type="checkbox" id="csAuto"> auto-refresh 30s</label>
+        <label class="scanopt"><input type="checkbox" id="csInPlayOnly" checked> in-play only</label>
+        <div class="sum" id="csSum"></div>
+      </div>
+    </div>
+    <div class="panel" id="csResults" style="display:none">
+      <div style="overflow-x:auto">
+        <table class="scan" id="csTable">
+          <thead><tr>
+            <th class="l">Ticker</th><th>Spot</th><th>Spread</th><th>State</th>
+            <th>Wall band</th><th>Short / Long</th><th>Width</th>
+            <th>Credit</th><th>Stop</th><th>Risk / Reward</th><th>Exp</th><th>In?</th>
+          </tr></thead>
+          <tbody id="csBody"></tbody>
+        </table>
+      </div>
+      <div class="skips" id="csSkips"></div>
+    </div>
+  </div><!-- /spreadsView -->
 
   <div id="journalView" style="display:none">
     <div class="scanbar">
@@ -852,17 +893,20 @@ function showView(v){
   $("mapView").style.display = v==="map" ? "" : "none";
   $("spxView").style.display = v==="spx" ? "" : "none";
   $("wallsView").style.display = v==="walls" ? "" : "none";
+  $("spreadsView").style.display = v==="spreads" ? "" : "none";
   $("journalView").style.display = v==="journal" ? "" : "none";
   $("tabCalc").classList.toggle("active", v==="calc");
   $("tabScan").classList.toggle("active", v==="scan");
   $("tabMap").classList.toggle("active", v==="map");
   $("tabSpx").classList.toggle("active", v==="spx");
   $("tabWalls").classList.toggle("active", v==="walls");
+  $("tabSpreads").classList.toggle("active", v==="spreads");
   $("tabJournal").classList.toggle("active", v==="journal");
   if(v==="scan" && !SCANNED) runScan();
   if(v==="map" && currentTicker() && MAP_TICKER!==currentTicker()) runMap();
   if(v==="spx" && !SPX_LOADED) runSpx();
   if(v==="walls" && !WALLS_LOADED) runWalls();
+  if(v==="spreads") initSpreads();
   if(v==="journal") renderJournal();
 }
 
@@ -1253,6 +1297,117 @@ function wallTypeBadge(t, rel){
   if(t==="NEUTRAL") return `<span class="wtype neu" title="IV in line with the smile — no clear buying/selling read">NEU</span>`;
   return `<span class="wtype neu" title="not enough liquidity / data to read the wall type">—</span>`;
 }
+// ---- Credit spreads (IV-wall strategy) ----
+const CS_KEY="netdealer_spreads_input", CS_IN_KEY="netdealer_spreads_entered";
+let CS_DATA=[], CS_TIMER=null, CS_LOADED=false;
+function csEntered(){ try{ return JSON.parse(localStorage.getItem(CS_IN_KEY))||{}; }catch(e){ return {}; } }
+function csSetEntered(id,on){ const m=csEntered(); if(on)m[id]=Date.now(); else delete m[id]; try{ localStorage.setItem(CS_IN_KEY,JSON.stringify(m)); }catch(e){} }
+function csKey(t,side,exp){ return `${t}|${side}|${exp||""}`; }
+
+function initSpreads(){
+  if(CS_LOADED) return;
+  const saved=(()=>{ try{ return localStorage.getItem(CS_KEY); }catch(e){ return null; } })();
+  if(saved && !$("csInput").value) $("csInput").value=saved;
+}
+function parseWalls(text){
+  const out=[]; const lines=text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  let cur=null;
+  const wallRe=/(call|put)\s*iv\s*wall\s*:\s*([\d.]+)\s*-\s*([\d.]+).*?at\s*([\d.]+)/i;
+  for(const line of lines){
+    const m=line.match(wallRe);
+    if(m){
+      if(!cur) continue;
+      const side=m[1].toLowerCase(), lo=parseFloat(m[2]), hi=parseFloat(m[3]), iv=parseFloat(m[4]);
+      if(side==="call"){ cur.cw_low=Math.min(lo,hi); cur.cw_high=Math.max(lo,hi); cur.cw_iv=iv; }
+      else { cur.pw_low=Math.min(lo,hi); cur.pw_high=Math.max(lo,hi); cur.pw_iv=iv; }
+      continue;
+    }
+    const tk=line.replace(/^\$/,"").toUpperCase().match(/^[A-Z.]{1,6}$/);
+    if(tk){ cur={ticker:tk[0]}; out.push(cur); }
+  }
+  return out.filter(t=>t.cw_low!=null && t.pw_low!=null);
+}
+async function runSpreads(){
+  const parsed=parseWalls($("csInput").value);
+  if(!parsed.length){ msg("Couldn't parse any tickers — check the format."); return; }
+  try{ localStorage.setItem(CS_KEY,$("csInput").value); }catch(e){}
+  const btn=$("csBtn"); btn.disabled=true; const prev=btn.textContent; btn.textContent="Loading…"; msg("");
+  $("csSum").textContent="Pricing spreads for "+parsed.length+" tickers…";
+  try{
+    const results=await Promise.all(parsed.map(async t=>{
+      const q=`ticker=${encodeURIComponent(t.ticker)}&cw_low=${t.cw_low}&cw_high=${t.cw_high}&pw_low=${t.pw_low}&pw_high=${t.pw_high}`;
+      try{ const r=await fetch(api("/api/credit-spread?"+q)); return await r.json(); }
+      catch(e){ return {ticker:t.ticker, error:String(e)}; }
+    }));
+    CS_DATA=results; CS_LOADED=true; renderSpreads();
+  }catch(e){ msg("Spread load failed: "+e); }
+  finally{ btn.disabled=false; btn.textContent=prev; }
+}
+const CS_PRIORITY={ENTER:0,"TAKE PROFIT":1,STOP:1,MANAGE:2,WATCH:3,AVOID:4,WAIT:5,"n/a":6};
+function csDisplayState(s, entered){
+  if(!s || s.state==="n/a") return "n/a";
+  if(s.broke) return entered?"STOP":"AVOID";
+  if(entered && s.tp_hit) return "TAKE PROFIT";
+  if(!s.in_zone) return "WAIT";
+  if(s.credit!=null && s.credit>=s.enter_credit) return entered?"MANAGE":"ENTER";
+  return "WATCH";
+}
+function renderSpreads(){
+  const rows=[]; const errs=[];
+  (CS_DATA||[]).forEach(d=>{
+    if(d.error){ errs.push(d.ticker+" ("+d.error+")"); return; }
+    ["put_spread","call_spread"].forEach(key=>{
+      const s=d[key]; if(!s) return;
+      const id=csKey(d.ticker,s.side,d.expiry);
+      const entered=!!csEntered()[id];
+      rows.push({d,s,id,entered,disp:csDisplayState(s,entered)});
+    });
+  });
+  const inPlayOnly=$("csInPlayOnly").checked;
+  let show=inPlayOnly ? rows.filter(r=>r.entered || (r.disp!=="WAIT" && r.disp!=="n/a")) : rows;
+  show.sort((a,b)=>(CS_PRIORITY[a.disp]??9)-(CS_PRIORITY[b.disp]??9) || a.d.ticker.localeCompare(b.d.ticker));
+  $("csResults").style.display = "";
+  const nEnter=rows.filter(r=>r.disp==="ENTER").length, nWatch=rows.filter(r=>r.disp==="WATCH").length;
+  $("csSum").innerHTML = `<b>${CS_DATA.length}</b> tickers · <span style="color:var(--green)"><b>${nEnter}</b> ENTER</span> · <span style="color:var(--amber)"><b>${nWatch}</b> WATCH</span> · showing <b>${show.length}</b>`
+    + ` · <span style="color:var(--muted)">${((CS_DATA[0]&&CS_DATA[0].mode)||"").toUpperCase()} · ${new Date().toLocaleTimeString()}</span>`;
+  const body=$("csBody"); body.innerHTML="";
+  show.forEach(({d,s,id,entered,disp})=>{
+    const tr=document.createElement("tr");
+    const spreadLbl = s.side==="PUT" ? "PUT credit" : "CALL credit";
+    const spreadCls = s.side==="PUT" ? "sideCall" : "sidePut"; // bull put = green, bear call = red
+    const cls = disp.replace(" ","").toLowerCase();
+    let riskRew = `$${fmtInt(s.max_risk)} / $${fmtInt(s.max_profit)}`;
+    if(entered && s.credit!=null){
+      const pnl=Math.round((s.enter_credit - s.credit)*100*s.contracts);
+      riskRew = `<b class="${pnl>=0?'edgeUp':'edgeDn'}">${pnl>=0?'+':''}$${fmtInt(Math.abs(pnl))}</b> <span style="color:var(--dim)">live</span>`;
+    }
+    const creditTxt = s.credit==null ? "—"
+      : `<b>$${fmt(s.credit)}</b> <span style="color:var(--dim)">/ $${fmt(s.enter_credit)}</span>`;
+    const toWall = s.to_wall_pct!=null ? `${s.to_wall_pct>=0?"":"▼ "}${(Math.abs(s.to_wall_pct)*100).toFixed(1)}%` : "";
+    tr.innerHTML =
+      `<td class="l tk">${d.ticker}</td>`
+      + `<td>${fmt(d.spot,2)}</td>`
+      + `<td class="${spreadCls}">${spreadLbl}</td>`
+      + `<td><span class="cstate ${cls}">${disp}</span></td>`
+      + `<td style="color:var(--muted)">${fmtStrike(s.wall_low)}–${fmtStrike(s.wall_high)} <span style="color:var(--dim)">${toWall}</span></td>`
+      + `<td class="csleg">${fmtStrike(s.short_strike)} / ${fmtStrike(s.long_strike)}</td>`
+      + `<td>${s.width!=null?fmt(s.width):"—"}</td>`
+      + `<td>${creditTxt}</td>`
+      + `<td style="color:var(--muted)">${fmtStrike(s.stop_level)}</td>`
+      + `<td>${riskRew}</td>`
+      + `<td style="color:var(--muted)">${d.expiry||"—"}${d.sessions!=null?` <span class="reach ${d.sessions<1?'mean':'max'}" style="padding:1px 5px">${d.sessions}DTE</span>`:""}</td>`
+      + `<td><input type="checkbox" ${entered?"checked":""} data-csid="${id}"></td>`;
+    body.appendChild(tr);
+  });
+  $("csSkips").textContent = errs.length ? "Couldn't price: "+errs.join(", ") : "";
+  if(!show.length) $("csSkips").textContent = inPlayOnly
+    ? "Nothing in play right now (all WAIT). Uncheck 'in-play only' to see every spread." : "No rows.";
+}
+function csSetAuto(on){
+  if(CS_TIMER){ clearInterval(CS_TIMER); CS_TIMER=null; }
+  if(on) CS_TIMER=setInterval(()=>{ if($("spreadsView").style.display!=="none") runSpreads(); }, 30000);
+}
+
 function confBadge(v){
   if(v==null) return `<span class="reach na">—</span>`;
   const cls = v>=70?"mean":(v>=45?"max":"out");
@@ -1341,6 +1496,14 @@ $("tabScan").addEventListener("click",()=>showView("scan"));
 $("tabMap").addEventListener("click",()=>showView("map"));
 $("tabSpx").addEventListener("click",()=>showView("spx"));
 $("tabWalls").addEventListener("click",()=>showView("walls"));
+$("tabSpreads").addEventListener("click",()=>showView("spreads"));
+$("csBtn").addEventListener("click",runSpreads);
+$("csInPlayOnly").addEventListener("change",()=>{ if(CS_DATA.length) renderSpreads(); });
+$("csAuto").addEventListener("change",e=>csSetAuto(e.target.checked));
+$("csBody").addEventListener("change",e=>{
+  const cb=e.target.closest("input[data-csid]"); if(!cb) return;
+  csSetEntered(cb.getAttribute("data-csid"), cb.checked); renderSpreads();
+});
 $("tabJournal").addEventListener("click",()=>showView("journal"));
 $("wallBtn").addEventListener("click",runWalls);
 $("wallBand").addEventListener("change",runWalls);

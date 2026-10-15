@@ -42,6 +42,9 @@ jobs:
       - name: Run 0DTE SPX trade-plan tests
         run: python tests/test_trade_plan.py
 
+      - name: Run credit-spread tests
+        run: python tests/test_credit_spreads.py
+
       - name: Smoke-test the app boots (mock mode)
         env:
           DATA_MODE: mock

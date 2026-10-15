@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse
 import datetime as dt
 
 from app.config import settings
+from app.credit_spreads import evaluate_ticker
 from app.market_calendar import sessions_to_expiry
 from app.net_dealer import compute, max_pain_volume, peak_volume_strike, setup_confidence
 from app.providers.factory import build_provider
@@ -266,6 +267,50 @@ def wall_scan_endpoint(
         log.warning("wall-scan failed: %s", exc)
         return JSONResponse({"error": f"wall scan failed: {exc}"}, status_code=502)
     return JSONResponse(payload)
+
+
+@app.get("/api/credit-spread")
+def credit_spread(
+        ticker: str = Query(..., min_length=1),
+        cw_low: float = Query(...), cw_high: float = Query(...),
+        pw_low: float = Query(...), pw_high: float = Query(...),
+        expiry: str = Query("", description="blank = nearest expiry")) -> JSONResponse:
+    """Evaluate the put + call IV-wall credit spreads for one ticker.
+
+    The caller supplies the ticker's call/put IV-wall bands; this finds the
+    width-wide legs off the live chain, prices the net credit, and raises the
+    WAIT / WATCH / ENTER / STOP signals. Read-only monitor — never routes orders.
+    """
+    try:
+        exp = expiry.strip()
+        if not exp:
+            exps = provider.get_expirations(ticker)
+            if not exps:
+                return JSONResponse({"ticker": ticker.upper(), "error": "no expirations"},
+                                    status_code=502)
+            exp = exps[0]
+        rows, spot = provider.get_chain(ticker, exp, settings.strike_count)
+    except Exception as exc:  # pragma: no cover - network
+        log.warning("credit-spread %s failed: %s", ticker, exc)
+        return JSONResponse({"ticker": ticker.upper(), "error": f"chain fetch failed: {exc}"},
+                            status_code=502)
+    if not rows or not spot:
+        return JSONResponse({"ticker": ticker.upper(), "error": "chain unavailable"},
+                            status_code=502)
+
+    try:
+        sess = sessions_to_expiry(dt.date.fromisoformat(exp))
+    except (ValueError, TypeError):
+        sess = None
+    _ty, dte = t_years(exp)
+    spreads = evaluate_ticker(rows, spot, cw_low, cw_high, pw_low, pw_high,
+                              settings.cs_width, settings.cs_enter_credit,
+                              settings.cs_take_profit, settings.cs_contracts)
+    return JSONResponse({
+        "ticker": ticker.upper(), "expiry": exp, "dte": round(dte, 2), "sessions": sess,
+        "spot": round(spot, 2), "mode": "live" if settings.live else "mock",
+        **spreads,
+    })
 
 
 def main() -> None:

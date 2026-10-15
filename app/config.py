@@ -126,6 +126,14 @@ class Settings:
     # (relative) above/below its local smile to read as SOFT/HARD (else NEUTRAL).
     wall_iv_rel_thr: float = field(default_factory=lambda: _float("WALL_IV_REL_THR", 0.04))
 
+    # ----- Credit-spread monitor (IV-wall strategy) ------------------------
+    # $2.50-wide spreads; enter when the net credit reaches $1.00; take profit
+    # when it decays to $0.10; always 10 contracts. All per-share dollars.
+    cs_width: float = field(default_factory=lambda: _float("CS_WIDTH", 2.50))
+    cs_enter_credit: float = field(default_factory=lambda: _float("CS_ENTER_CREDIT", 1.00))
+    cs_take_profit: float = field(default_factory=lambda: _float("CS_TAKE_PROFIT", 0.10))
+    cs_contracts: int = field(default_factory=lambda: _int("CS_CONTRACTS", 10))
+
     # ----- Range achievability filter (Biggjuann/Range methodology) --------
     # Drop scan candidates whose required move to C exceeds what the ticker has
     # proven it can travel over the recent window — so surfaced trades are
