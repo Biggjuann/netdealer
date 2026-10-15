@@ -492,7 +492,7 @@
     </div>
 
     <div class="panel" id="csTracker" style="display:none">
-      <h3>Tracked trades <span style="color:var(--dim);text-transform:none;letter-spacing:0">— tick "In?" on a spread to track it (saved on this device)</span></h3>
+      <h3>Tracked trades <span style="color:var(--dim);text-transform:none;letter-spacing:0">— tick "In?" on a spread to track it</span> <span id="csStoreMode" style="float:right;font-size:10px;letter-spacing:0;text-transform:none"></span></h3>
       <div class="lvlgrid" id="csScore" style="margin-bottom:14px"></div>
       <div style="overflow-x:auto">
         <table class="scan" id="csTrackTable">
@@ -550,6 +550,10 @@
       (when the page is served by the backend). For a GitHub Pages front-end, set this
       to your deployed backend URL, e.g. <span class="mono">https://your-app.up.railway.app</span>.</p>
     <input id="apiInput" class="mono" placeholder="https://your-backend-url" />
+    <h4 style="margin-top:16px">Access token <span style="font-weight:400;color:var(--dim);font-size:11px">(server-side trade sync)</span></h4>
+    <p>Set to the backend's <span class="mono">APP_ACCESS_TOKEN</span> to sync your tracked trades to the
+      server (durable + cross-device). Leave blank to keep trades on this device only.</p>
+    <input id="tokInput" class="mono" type="password" placeholder="access token" />
     <div style="display:flex;gap:10px;justify-content:flex-end">
       <button class="gear" id="apiCancel">Cancel</button>
       <button class="go" id="apiSave">Save</button>
@@ -560,8 +564,11 @@
 <script>
 const $ = id => document.getElementById(id);
 const API_KEY = "netdealer_api_base";
+const TOK_KEY = "netdealer_token";
 function apiBase(){ return localStorage.getItem(API_KEY) || ""; }
 function api(path){ return (apiBase() ? apiBase().replace(/\/$/,"") : "") + path; }
+function authToken(){ try{ return localStorage.getItem(TOK_KEY) || ""; }catch(e){ return ""; } }
+function authHeaders(){ const t=authToken(); return t ? {"X-Access-Token": t} : {}; }
 const fmt = (x,d=2) => (x===null||x===undefined||isNaN(x)) ? "—" : Number(x).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
 const fmtInt = x => (x===null||x===undefined||isNaN(x)) ? "—" : Number(x).toLocaleString();
 const pct = x => (x===null||x===undefined||isNaN(x)) ? "—" : (x*100).toFixed(1)+"%";
@@ -576,6 +583,7 @@ let PROFILE = null;
 async function loadConfig(){
   try{
     const r = await fetch(api("/api/config")); const c = await r.json();
+    window.STORE_ENABLED = !!c.store_enabled;
     const list = $("tickerList"); list.innerHTML = "";
     const tickers = c.tickers || [];
     tickers.forEach(t => { const o=document.createElement("option"); o.value=t; list.appendChild(o); });
@@ -1319,40 +1327,77 @@ function wallTypeBadge(t, rel){
 // ---- Credit spreads (IV-wall strategy) ----
 const CS_KEY="netdealer_spreads_input", CS_OPEN_KEY="netdealer_spreads_open", CS_CLOSED_KEY="netdealer_spreads_closed";
 let CS_DATA=[], CS_TIMER=null, CS_LOADED=false;
+let CS_STORE={open:{},closed:[]};        // in-memory cache (server- or device-backed)
 function _lsGet(k,def){ try{ return JSON.parse(localStorage.getItem(k)) ?? def; }catch(e){ return def; } }
 function _lsSet(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){} }
-function csOpen(){ return _lsGet(CS_OPEN_KEY,{}); }         // {id: record}
-function csClosed(){ return _lsGet(CS_CLOSED_KEY,[]); }
+function csServerOn(){ return !!authToken() && window.STORE_ENABLED!==false; }
+function csOpen(){ return CS_STORE.open; }
+function csClosed(){ return CS_STORE.closed; }
 function csKey(t,side,exp){ return `${t}|${side}|${exp||""}`; }
 function csFindSpread(id){
   for(const d of (CS_DATA||[])){ if(d.error) continue;
     for(const k of ["put_spread","call_spread"]){ const s=d[k]; if(s && csKey(d.ticker,s.side,d.expiry)===id) return {d,s}; } }
   return null;
 }
+function csPersistLocal(){ _lsSet(CS_OPEN_KEY,CS_STORE.open); _lsSet(CS_CLOSED_KEY,CS_STORE.closed); }
+async function csServerPut(rec){
+  if(!csServerOn()) return;
+  try{ await fetch(api("/api/trades/"+encodeURIComponent(rec.id)),
+    {method:"PUT",headers:{...authHeaders(),"Content-Type":"application/json"},body:JSON.stringify(rec)}); }
+  catch(e){ msg("Trade sync failed (kept on this device): "+e); }
+}
+async function csServerDel(id){
+  if(!csServerOn()) return;
+  try{ await fetch(api("/api/trades/"+encodeURIComponent(id)),{method:"DELETE",headers:authHeaders()}); }
+  catch(e){ msg("Trade sync failed: "+e); }
+}
+async function csLoad(){
+  // Server is source of truth when a token is set; else device-local cache.
+  if(csServerOn()){
+    try{
+      const r=await fetch(api("/api/trades"),{headers:authHeaders()});
+      if(r.status===401||r.status===503){ window.STORE_ENABLED=false; }
+      else { const j=await r.json(); const all=j.trades||[];
+        const open={}, closed=[];
+        all.forEach(t=>{ if(t.status==="closed") closed.push(t); else open[t.id]=t; });
+        closed.sort((a,b)=>(b.closed_ts||0)-(a.closed_ts||0));
+        CS_STORE={open,closed}; csPersistLocal(); renderTracker(); return;
+      }
+    }catch(e){ /* fall back to local */ }
+  }
+  CS_STORE={open:_lsGet(CS_OPEN_KEY,{}), closed:_lsGet(CS_CLOSED_KEY,[])};
+  renderTracker();
+}
 function csTrack(id){
   const hit=csFindSpread(id); if(!hit) return;
-  const {d,s}=hit; const m=csOpen();
-  m[id]={ id, ts:Date.now(), ticker:d.ticker, side:s.side, expiry:d.expiry,
+  const {d,s}=hit;
+  const rec={ id, status:"open", ts:Date.now(), ticker:d.ticker, side:s.side, expiry:d.expiry,
     short_strike:s.short_strike, long_strike:s.long_strike, width:s.width,
     entry_credit:(s.credit!=null?s.credit:s.enter_credit), qty:s.contracts,
     wall_low:s.wall_low, wall_high:s.wall_high, stop_level:s.stop_level };
-  _lsSet(CS_OPEN_KEY,m); renderTracker();
+  CS_STORE.open[id]=rec; csPersistLocal(); renderTracker(); csServerPut(rec);
 }
-function csUntrack(id){ const m=csOpen(); delete m[id]; _lsSet(CS_OPEN_KEY,m); renderTracker(); }
+function csUntrack(id){ delete CS_STORE.open[id]; csPersistLocal(); renderTracker(); csServerDel(id); }
 function csClose(id, exitCredit, outcome){
-  const m=csOpen(); const rec=m[id]; if(!rec) return;
+  const rec=CS_STORE.open[id]; if(!rec) return;
   const ex = exitCredit!=null ? exitCredit : 0;
-  rec.exit_credit=ex; rec.outcome=outcome||"manual"; rec.closed_ts=Date.now();
-  rec.pnl=Math.round((rec.entry_credit - ex)*100*rec.qty);
-  const arr=csClosed(); arr.unshift(rec); _lsSet(CS_CLOSED_KEY,arr);
-  delete m[id]; _lsSet(CS_OPEN_KEY,m); renderTracker(); renderSpreads();
+  const closed={...rec, status:"closed", exit_credit:ex, outcome:outcome||"manual",
+    closed_ts:Date.now(), pnl:Math.round((rec.entry_credit - ex)*100*rec.qty),
+    id:id+"|"+Date.now()};
+  CS_STORE.closed.unshift(closed); delete CS_STORE.open[id];
+  csPersistLocal(); renderTracker(); renderSpreads();
+  csServerPut(closed); csServerDel(id);
+}
+function csClearClosed(){
+  const ids=CS_STORE.closed.map(r=>r.id); CS_STORE.closed=[]; csPersistLocal(); renderTracker();
+  if(csServerOn()){ fetch(api("/api/trades/clear?status=closed"),{method:"POST",headers:authHeaders()}).catch(()=>{
+    ids.forEach(csServerDel); }); }
 }
 
 function initSpreads(){
-  if(CS_LOADED) return;
   const saved=_lsGet(CS_KEY,null);
   if(saved && !$("csInput").value) $("csInput").value=saved;
-  renderTracker();
+  if(!CS_LOADED){ CS_LOADED=true; csLoad(); } else renderTracker();
 }
 function parseWalls(text){
   const out=[]; const lines=text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
@@ -1461,6 +1506,9 @@ function csLiveStatus(rec){
 function renderTracker(){
   const open=Object.values(csOpen()), closed=csClosed();
   $("csTracker").style.display = (open.length||closed.length) ? "" : "none";
+  const sm=$("csStoreMode"); if(sm) sm.innerHTML = csServerOn()
+    ? `<span style="color:var(--green)">☁ synced to server</span>`
+    : `<span style="color:var(--muted)">📱 this device only${authToken()?" (server unreachable)":""}</span>`;
   // scorecard (closed realized + open live)
   const realized=closed.reduce((t,r)=>t+(r.pnl||0),0);
   const wins=closed.filter(r=>r.pnl>0).length, losses=closed.filter(r=>r.pnl<=0).length;
@@ -1623,7 +1671,7 @@ $("csTrackBody").addEventListener("click",e=>{
     const l=hit?csLiveStatus(csOpen()[id]):null;
     csClose(id, ex, l&&l.status==="STOP"?"stop":(l&&l.status==="TAKE PROFIT"?"take_profit":"manual"));
   } else if(act==="untrack"){ csUntrack(id); renderSpreads(); }
-  else if(act==="rm"){ const arr=csClosed().filter(r=>String(r.closed_ts)!==id); _lsSet(CS_CLOSED_KEY,arr); renderTracker(); }
+  else if(act==="rm"){ const rec=CS_STORE.closed.find(r=>String(r.closed_ts)===id); CS_STORE.closed=CS_STORE.closed.filter(r=>String(r.closed_ts)!==id); csPersistLocal(); renderTracker(); if(rec) csServerDel(rec.id); }
 });
 $("csExport").addEventListener("click",()=>{
   const rows=csClosed().concat(Object.values(csOpen()).map(r=>({...r,status:"open"})));
@@ -1634,7 +1682,7 @@ $("csExport").addEventListener("click",()=>{
   const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
   a.download="credit_spreads_"+new Date().toISOString().slice(0,10)+".csv"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
 });
-$("csClear").addEventListener("click",()=>{ if(confirm("Clear all CLOSED tracked trades? (open trades stay)")){ _lsSet(CS_CLOSED_KEY,[]); renderTracker(); } });
+$("csClear").addEventListener("click",()=>{ if(confirm("Clear all CLOSED tracked trades? (open trades stay)")){ csClearClosed(); } });
 $("tabJournal").addEventListener("click",()=>showView("journal"));
 $("wallBtn").addEventListener("click",runWalls);
 $("wallBand").addEventListener("change",runWalls);
@@ -1661,12 +1709,14 @@ $("scanRange").addEventListener("change",()=>{ if(SCANNED) runScan(); });
 $("scanDte").addEventListener("change",()=>{ if(SCANNED) runScan(); });
 $("goBtn").addEventListener("click",calculate);
 // api endpoint modal
-$("gear").addEventListener("click",()=>{ $("apiInput").value=apiBase(); $("modal").classList.add("on"); });
+$("gear").addEventListener("click",()=>{ $("apiInput").value=apiBase(); $("tokInput").value=authToken(); $("modal").classList.add("on"); });
 $("apiCancel").addEventListener("click",()=>$("modal").classList.remove("on"));
 $("apiSave").addEventListener("click",()=>{
   const v=$("apiInput").value.trim();
   if(v) localStorage.setItem(API_KEY,v); else localStorage.removeItem(API_KEY);
-  $("modal").classList.remove("on"); boot();
+  const t=$("tokInput").value.trim();
+  if(t) localStorage.setItem(TOK_KEY,t); else localStorage.removeItem(TOK_KEY);
+  $("modal").classList.remove("on"); CS_LOADED=false; boot(); if($("spreadsView").style.display!=="none") initSpreads();
 });
 
 setupProfileHover();

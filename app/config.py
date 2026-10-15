@@ -149,6 +149,13 @@ class Settings:
     range_cache_seconds: int = field(default_factory=lambda: _int("RANGE_CACHE_SECONDS", 3600))
 
     # ----- Web -------------------------------------------------------------
+    # Server-side trade store (SQLite). Set DB_PATH to a path on a Railway
+    # VOLUME (e.g. /data/netdealer.db) so trades survive redeploys; without a
+    # volume the file is ephemeral. APP_ACCESS_TOKEN gates the trades API (the
+    # app is a public URL) — the UI must send the same token. If it is unset the
+    # trades API is disabled and the tracker stays device-local.
+    db_path: str = field(default_factory=lambda: os.getenv("DB_PATH", "/data/netdealer.db"))
+    app_access_token: str = field(default_factory=lambda: os.getenv("APP_ACCESS_TOKEN", ""))
     # CORS origins allowed to call the API (for a GitHub Pages front-end that
     # is hosted on a different origin than the deployed backend). "*" allowed.
     cors_origins: List[str] = field(default_factory=lambda: [
