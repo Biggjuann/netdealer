@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.credit_spreads import build_spread, evaluate_ticker
+from app.credit_spreads import build_spread, evaluate_ticker, session_flags
 from app.net_dealer import StrikeRow
 
 # AAPL-like chain, 2.5-wide strikes around the walls, with simple put/call asks.
@@ -102,6 +102,21 @@ def test_stop_uses_15m_candle_close_not_spot():
                       take_profit=0.10, contracts=10, candle_close=331.0)
     assert s2["broke"] is True and s2["state"] == "AVOID"
     print("ok  stop keys off the 15m candle close, not an intraday touch")
+
+
+def test_session_flags_rth_and_force_close():
+    # Closed session → not RTH, no force-close.
+    s = session_flags(False, None, 5)
+    assert s["is_rth"] is False and s["force_close"] is False
+    # Open, 120 min to close → RTH, not yet force-close (115 min to 2:55).
+    s = session_flags(True, 120.0, 5)
+    assert s["is_rth"] is True and s["force_close"] is False and s["minutes_to_force_close"] == 115.0
+    # Open, 3 min to close → past 2:55pm CT → force-close.
+    s = session_flags(True, 3.0, 5)
+    assert s["force_close"] is True
+    # Exactly at the 5-min mark → force-close fires.
+    assert session_flags(True, 5.0, 5)["force_close"] is True
+    print("ok  session flags: RTH gate + 2:55pm CT force-close")
 
 
 def test_evaluate_ticker_has_both_sides():

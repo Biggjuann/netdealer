@@ -20,14 +20,14 @@ from fastapi.responses import FileResponse, JSONResponse
 import datetime as dt
 
 from app.config import settings
-from app.credit_spreads import evaluate_ticker
+from app.credit_spreads import evaluate_ticker, session_flags
 from app.market_calendar import sessions_to_expiry
 from app.net_dealer import compute, max_pain_volume, peak_volume_strike, setup_confidence
 from app.providers.factory import build_provider
 from app.scanner import _range_for, classify_range, rank_contracts, run_scan, wall_scan
 from app.store import TradeStore
 from app.timeutil import t_years
-from app.trade_plan import assemble_plan
+from app.trade_plan import assemble_plan, eod_state
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -307,6 +307,20 @@ def wall_scan_endpoint(
     return JSONResponse(payload)
 
 
+def _cs_session() -> dict:
+    """RTH + force-close state for the credit-spread rule: all trades are RTH
+    only and closed ``cs_force_close_min`` before the session close (5 →
+    2:55pm CT / 3:55pm ET). DST- and holiday-aware via eod_state."""
+    e = eod_state()
+    flags = session_flags(e["is_open"], e["minutes_to_close"], settings.cs_force_close_min)
+    return {
+        **flags,
+        "trading_day": e["trading_day"], "after_close": e["after_close"],
+        "minutes_to_close": e["minutes_to_close"],
+        "now_et": e["now_et"], "close_et": e["close_et"],
+    }
+
+
 @app.get("/api/credit-spread")
 def credit_spread(
         ticker: str = Query(..., min_length=1),
@@ -354,6 +368,7 @@ def credit_spread(
         "ticker": ticker.upper(), "expiry": exp, "dte": round(dte, 2), "sessions": sess,
         "spot": round(spot, 2), "candle_close": round(c15, 2) if c15 else None,
         "mode": "live" if settings.live else "mock",
+        "session": _cs_session(),
         **spreads,
     })
 

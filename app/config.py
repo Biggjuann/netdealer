@@ -133,6 +133,9 @@ class Settings:
     cs_enter_credit: float = field(default_factory=lambda: _float("CS_ENTER_CREDIT", 1.00))
     cs_take_profit: float = field(default_factory=lambda: _float("CS_TAKE_PROFIT", 0.10))
     cs_contracts: int = field(default_factory=lambda: _int("CS_CONTRACTS", 10))
+    # RTH-only + force-close: close all open trades this many minutes before the
+    # session close (5 → 2:55pm CT / 3:55pm ET on a normal day).
+    cs_force_close_min: int = field(default_factory=lambda: _int("CS_FORCE_CLOSE_MIN", 5))
 
     # ----- Range achievability filter (Biggjuann/Range methodology) --------
     # Drop scan candidates whose required move to C exceeds what the ticker has
