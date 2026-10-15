@@ -45,6 +45,9 @@ jobs:
       - name: Run credit-spread tests
         run: python tests/test_credit_spreads.py
 
+      - name: Run trade-store tests
+        run: python tests/test_store.py
+
       - name: Smoke-test the app boots (mock mode)
         env:
           DATA_MODE: mock

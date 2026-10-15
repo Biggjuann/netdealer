@@ -13,7 +13,7 @@ import logging
 import os
 from dataclasses import asdict
 
-from fastapi import FastAPI, Query
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
@@ -25,6 +25,7 @@ from app.market_calendar import sessions_to_expiry
 from app.net_dealer import compute, max_pain_volume, peak_volume_strike, setup_confidence
 from app.providers.factory import build_provider
 from app.scanner import _range_for, classify_range, rank_contracts, run_scan, wall_scan
+from app.store import TradeStore
 from app.timeutil import t_years
 from app.trade_plan import assemble_plan
 
@@ -38,11 +39,22 @@ app = FastAPI(title="Net Dealer Target — 'C' Calculator")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins or ["*"],
-    allow_methods=["GET"],
+    allow_methods=["GET", "PUT", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
 provider = build_provider()
+store = TradeStore(settings.db_path)
+CS_COLLECTION = "credit_spreads"
+
+
+def require_token(x_access_token: str = Header(None)) -> None:
+    """Gate the trades API: the app is a public URL, so writes/reads of the
+    server-side blotter require the shared APP_ACCESS_TOKEN."""
+    if not settings.app_access_token:
+        raise HTTPException(503, "trade storage not configured (set APP_ACCESS_TOKEN)")
+    if x_access_token != settings.app_access_token:
+        raise HTTPException(401, "invalid access token")
 
 
 @app.get("/")
@@ -61,7 +73,33 @@ def config() -> JSONResponse:
         "volume_weight": settings.volume_weight,
         "blend_alpha": settings.blend_alpha,
         "token_configured": bool(settings.token_share_key),
+        "store_enabled": bool(settings.app_access_token),
     })
+
+
+@app.get("/api/trades", dependencies=[Depends(require_token)])
+def trades_list() -> JSONResponse:
+    """All tracked credit-spread trades (open + closed), newest first."""
+    return JSONResponse({"trades": store.list(CS_COLLECTION)})
+
+
+@app.put("/api/trades/{trade_id}", dependencies=[Depends(require_token)])
+def trades_put(trade_id: str, record: dict = Body(...)) -> JSONResponse:
+    """Upsert one trade record (the client owns the shape)."""
+    record = dict(record or {})
+    record["id"] = trade_id
+    return JSONResponse(store.put(CS_COLLECTION, trade_id, record))
+
+
+@app.delete("/api/trades/{trade_id}", dependencies=[Depends(require_token)])
+def trades_delete(trade_id: str) -> JSONResponse:
+    return JSONResponse({"deleted": store.delete(CS_COLLECTION, trade_id)})
+
+
+@app.post("/api/trades/clear", dependencies=[Depends(require_token)])
+def trades_clear(status: str = Query("", description="only clear this status; blank = all")) -> JSONResponse:
+    n = store.clear(CS_COLLECTION, status or None)
+    return JSONResponse({"cleared": n})
 
 
 @app.get("/api/expiries")
